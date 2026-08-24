@@ -7,78 +7,242 @@
   --menu-sidebar: #1f2937;
 }
 
-* { box-sizing: border-box; }
+/* --------------------------------------------------------------------------
+   Page / app sizing
+   -------------------------------------------------------------------------- */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+/*
+ * On desktop the dashboard itself owns scrolling.
+ *
+ * This prevents the sidebar footer from disappearing because the
+ * browser document itself became taller than the viewport.
+ */
+body {
+  overflow: hidden;
+}
+
+/* --------------------------------------------------------------------------
+   Main dashboard shell
+   -------------------------------------------------------------------------- */
 
 .menu-dashboard-shell {
-  min-height: 100vh;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+
+  min-height: 0;
+
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns:
+    280px
+    minmax(0, 1fr);
+
+  overflow: hidden;
+
   background: var(--menu-bg);
   color: var(--menu-text);
 }
 
+/* --------------------------------------------------------------------------
+   Sidebar
+   -------------------------------------------------------------------------- */
+
 .menu-sidebar {
-  min-height: 100vh;
+  width: 280px;
+  height: 100%;
+
+  min-width: 0;
+  min-height: 0;
+
   display: flex;
   flex-direction: column;
+
   gap: 14px;
   padding: 18px;
+
+  overflow: hidden;
+
   background: var(--menu-sidebar);
   color: white;
 }
 
+/*
+ * The brand must never shrink when the menu list grows.
+ */
 .sidebar-brand {
+  flex: 0 0 auto;
+
   display: flex;
   align-items: baseline;
   gap: 8px;
 }
 
-.sidebar-brand strong { font-size: 18px; }
-.sidebar-brand span { font-size: 11px; opacity: .65; text-transform: uppercase; }
+.sidebar-brand strong {
+  font-size: 18px;
+}
 
+.sidebar-brand span {
+  font-size: 11px;
+  opacity: 0.65;
+  text-transform: uppercase;
+}
+
+/*
+ * If there are buttons/controls directly between the brand and
+ * menu list, don't let them shrink either.
+ */
+.menu-sidebar > .p-button {
+  flex: 0 0 auto;
+}
+
+/*
+ * THIS is the only vertically scrollable part of the sidebar.
+ *
+ * min-height: 0 is important inside a flex container. Without it,
+ * this element may grow to the size of all its children and push
+ * the footer below the viewport.
+ */
 .sidebar-menu-list {
+  flex: 1 1 auto;
+
+  min-width: 0;
+  min-height: 0;
+
   display: flex;
   flex-direction: column;
   gap: 7px;
+
   overflow-y: auto;
+  overflow-x: hidden;
+
+  /*
+   * Give the scrollbar a little breathing room.
+   */
+  padding-right: 4px;
+
+  /*
+   * Prevent scroll chaining from moving some outer container.
+   */
+  overscroll-behavior: contain;
+
+  scrollbar-width: thin;
+  scrollbar-color:
+    rgba(255, 255, 255, 0.22)
+    transparent;
 }
+
+.sidebar-menu-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar-menu-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-menu-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.sidebar-menu-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+/* --------------------------------------------------------------------------
+   Sidebar menu entries
+   -------------------------------------------------------------------------- */
 
 .sidebar-menu-item {
   width: 100%;
-  border: 1px solid rgba(255,255,255,.12);
+
+  flex: 0 0 auto;
+
+  border:
+    1px solid
+    rgba(255, 255, 255, 0.12);
+
   border-radius: 8px;
-  background: rgba(255,255,255,.04);
+
+  background:
+    rgba(255, 255, 255, 0.04);
+
   color: white;
+
   padding: 10px;
+
   display: flex;
   justify-content: space-between;
+
   gap: 8px;
+
   text-align: left;
+
   cursor: pointer;
 }
 
 .sidebar-menu-item.active {
   border-color: #f0a640;
-  background: rgba(240,166,64,.12);
+
+  background:
+    rgba(240, 166, 64, 0.12);
 }
 
 .sidebar-menu-main {
   min-width: 0;
+
   display: flex;
   flex-direction: column;
+
   gap: 3px;
 }
 
-.sidebar-menu-main small { opacity: .65; }
+.sidebar-menu-main strong {
+  overflow: hidden;
+
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-menu-main small {
+  opacity: 0.65;
+}
+
+/* --------------------------------------------------------------------------
+   Yumm chip
+   -------------------------------------------------------------------------- */
 
 .yumm-chip {
   align-self: flex-start;
-  border: 1px solid rgba(255,255,255,.2);
+
+  flex: 0 0 auto;
+
+  border:
+    1px solid
+    rgba(255, 255, 255, 0.2);
+
   background: transparent;
-  color: rgba(255,255,255,.65);
+
+  color:
+    rgba(255, 255, 255, 0.65);
+
   border-radius: 999px;
+
   padding: 3px 7px;
+
   font-size: 10px;
+
   cursor: pointer;
 }
 
@@ -87,238 +251,79 @@
   border-color: #6ee7b7;
 }
 
+/* --------------------------------------------------------------------------
+   Fixed sidebar footer
+   -------------------------------------------------------------------------- */
+
+/*
+ * This part NEVER scrolls with the menu list.
+ *
+ * It stays visible at the bottom of the sidebar.
+ */
 .sidebar-footer {
+  flex: 0 0 auto;
+
   margin-top: auto;
+
   display: flex;
   flex-direction: column;
+
   gap: 6px;
+
+  /*
+   * Optional visual separation from a long menu list.
+   */
+  padding-top: 10px;
+
+  border-top:
+    1px solid
+    rgba(255, 255, 255, 0.08);
+
+  background: var(--menu-sidebar);
 }
 
 .auth-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
+
   font-size: 12px;
 }
 
 .api-settings {
   display: flex;
   flex-direction: column;
+
   gap: 6px;
 }
 
 .sidebar-empty {
-  opacity: .6;
+  opacity: 0.6;
   font-size: 13px;
 }
 
-.menu-dashboard-main {
-  width: 100%;
-  max-width: 1050px;
-  padding: 28px;
-}
-
-.dashboard-loading,
-.dashboard-placeholder {
-  min-height: 60vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-}
-
-.dashboard-placeholder h2 { margin-bottom: 4px; }
-.dashboard-placeholder p { color: var(--menu-muted); }
-
-.menu-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 18px;
-  align-items: flex-start;
-  margin-bottom: 18px;
-}
-
-.menu-header h1 { margin: 0; font-size: 28px; }
-.menu-header p { margin: 4px 0 0; color: var(--menu-muted); }
-
-.menu-header-actions,
-.save-bar-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.save-bar {
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  margin-bottom: 16px;
-  padding: 10px 12px;
-  border: 1px solid #f1d49c;
-  background: #fff8e8;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.dashboard-card {
-  background: var(--menu-surface);
-  border: 1px solid var(--menu-border);
-  border-radius: 10px;
-  padding: 18px;
-  margin-bottom: 16px;
-}
-
-.card-heading {
-  margin-bottom: 14px;
-}
-
-.card-heading.with-action {
-  display: flex;
-  justify-content: space-between;
-  gap: 14px;
-  align-items: flex-start;
-}
-
-.card-heading h2 {
-  margin: 0;
-  font-size: 17px;
-}
-
-.card-heading span {
-  display: block;
-  margin-top: 3px;
-  color: var(--menu-muted);
-  font-size: 12px;
-}
-
-.status-badge {
-  width: fit-content;
-  border-radius: 999px;
-  padding: 2px 6px;
-  font-size: 10px;
-}
-
-.status-badge.danger { background: #fee2e2; color: #991b1b; }
-.status-badge.success { background: #dcfce7; color: #166534; }
-
-.item-search {
-  width: min(360px, 100%);
-  margin-bottom: 14px;
-}
-
-.item-group + .item-group { margin-top: 18px; }
-
-.item-group h3 {
-  margin: 0 0 4px;
-  padding-bottom: 7px;
-  border-bottom: 1px solid var(--menu-border);
-  font-size: 13px;
-}
-
-.item-group h3 small { color: var(--menu-muted); font-weight: 400; }
-
-.item-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 11px 0;
-  border-bottom: 1px solid #f0f1f2;
-}
-
-.item-copy { min-width: 0; flex: 1; }
-.item-copy p { margin: 4px 0 0; color: var(--menu-muted); font-size: 12px; }
-
-.item-title-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.item-price {
-  margin-left: auto;
-  font-variant-numeric: tabular-nums;
-}
-
-.item-actions {
-  display: flex;
-  gap: 2px;
-}
-
-.empty-panel {
-  padding: 20px;
-  text-align: center;
-  color: var(--menu-muted);
-}
-
-.category-tree {
-  list-style: none;
-  padding-left: 0;
-  margin: 0;
-}
-
-.category-tree .category-tree {
-  padding-left: 24px;
-  margin-top: 4px;
-}
-
-.category-tree-node { margin: 4px 0; }
-
-.category-node-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.category-node-row .p-inputtext {
-  max-width: 320px;
-}
-
-@media (max-width: 860px) {
-  .menu-dashboard-shell { grid-template-columns: 1fr; }
-  .menu-sidebar { min-height: auto; }
-  .menu-dashboard-main { padding: 18px; }
-}
-
-@media (max-width: 600px) {
-  .menu-header,
-  .save-bar,
-  .card-heading.with-action {
-    flex-direction: column;
-  }
-}
-.user-role {
-  width: fit-content;
-
-  margin-top: 4px;
-  padding: 2px 6px;
-
-  border-radius: 999px;
-
-  background: rgba(255, 255, 255, 0.1);
-
-  color: rgba(255, 255, 255, 0.8);
-
-  font-size: 9px;
-  font-weight: 600;
-
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
+/* --------------------------------------------------------------------------
+   Authentication
+   -------------------------------------------------------------------------- */
 
 .auth-section {
   padding: 10px 0;
-  border-top: 1px solid rgba(255,255,255,.12);
-  border-bottom: 1px solid rgba(255,255,255,.12);
+
+  border-top:
+    1px solid
+    rgba(255, 255, 255, 0.12);
+
+  border-bottom:
+    1px solid
+    rgba(255, 255, 255, 0.12);
 }
 
 .logged-user {
   display: flex;
   align-items: center;
+
   gap: 9px;
+
   margin-bottom: 6px;
 }
 
@@ -326,13 +331,16 @@
   width: 30px;
   height: 30px;
 
+  flex: 0 0 30px;
+
   display: flex;
   align-items: center;
   justify-content: center;
 
   border-radius: 50%;
 
-  background: rgba(255,255,255,.08);
+  background:
+    rgba(255, 255, 255, 0.08);
 }
 
 .logged-user div {
@@ -356,10 +364,431 @@
 .logged-user small {
   overflow: hidden;
 
-  color: rgba(255,255,255,.55);
+  color:
+    rgba(255, 255, 255, 0.55);
 
   font-size: 10px;
 
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.user-role {
+  width: fit-content;
+
+  margin-top: 4px;
+  padding: 2px 6px;
+
+  border-radius: 999px;
+
+  background:
+    rgba(255, 255, 255, 0.1);
+
+  color:
+    rgba(255, 255, 255, 0.8);
+
+  font-size: 9px;
+  font-weight: 600;
+
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* --------------------------------------------------------------------------
+   Main/right-hand content
+   -------------------------------------------------------------------------- */
+
+/*
+ * The right side now scrolls independently from the sidebar.
+ */
+.menu-dashboard-main {
+  width: 100%;
+
+  /*
+   * Very important as a child of the grid:
+   * allow it to shrink inside the viewport.
+   */
+  min-width: 0;
+  min-height: 0;
+
+  height: 100%;
+
+  padding: 28px;
+
+  overflow-y: auto;
+  overflow-x: hidden;
+
+  overscroll-behavior: contain;
+
+  /*
+   * Keep the actual dashboard content from becoming excessively wide
+   * while still allowing the scroll container itself to fill the column.
+   */
+  scrollbar-gutter: stable;
+}
+
+/*
+ * Apply the old 1050px visual width to the children rather than
+ * restricting the scroll container itself.
+ */
+.menu-dashboard-main > * {
+  width: 100%;
+  max-width: 1050px;
+}
+
+/* --------------------------------------------------------------------------
+   Loading / placeholders
+   -------------------------------------------------------------------------- */
+
+.dashboard-loading,
+.dashboard-placeholder {
+  min-height: 60vh;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+}
+
+.dashboard-placeholder h2 {
+  margin-bottom: 4px;
+}
+
+.dashboard-placeholder p {
+  color: var(--menu-muted);
+}
+
+/* --------------------------------------------------------------------------
+   Menu header
+   -------------------------------------------------------------------------- */
+
+.menu-header {
+  display: flex;
+
+  justify-content: space-between;
+  align-items: flex-start;
+
+  gap: 18px;
+
+  margin-bottom: 18px;
+}
+
+.menu-header h1 {
+  margin: 0;
+
+  font-size: 28px;
+}
+
+.menu-header p {
+  margin: 4px 0 0;
+
+  color: var(--menu-muted);
+}
+
+.menu-header-actions,
+.save-bar-actions {
+  display: flex;
+
+  gap: 8px;
+
+  flex-wrap: wrap;
+}
+
+/* --------------------------------------------------------------------------
+   Save bar
+   -------------------------------------------------------------------------- */
+
+/*
+ * Sticky now sticks to .menu-dashboard-main, which is the right-side
+ * scroll container.
+ */
+.save-bar {
+  position: sticky;
+
+  top: 0;
+
+  z-index: 5;
+
+  margin-bottom: 16px;
+
+  padding: 10px 12px;
+
+  border:
+    1px solid
+    #f1d49c;
+
+  background: #fff8e8;
+
+  border-radius: 8px;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  gap: 12px;
+}
+
+/* --------------------------------------------------------------------------
+   Cards
+   -------------------------------------------------------------------------- */
+
+.dashboard-card {
+  background: var(--menu-surface);
+
+  border:
+    1px solid
+    var(--menu-border);
+
+  border-radius: 10px;
+
+  padding: 18px;
+
+  margin-bottom: 16px;
+}
+
+.card-heading {
+  margin-bottom: 14px;
+}
+
+.card-heading.with-action {
+  display: flex;
+
+  justify-content: space-between;
+  align-items: flex-start;
+
+  gap: 14px;
+}
+
+.card-heading h2 {
+  margin: 0;
+
+  font-size: 17px;
+}
+
+.card-heading span {
+  display: block;
+
+  margin-top: 3px;
+
+  color: var(--menu-muted);
+
+  font-size: 12px;
+}
+
+/* --------------------------------------------------------------------------
+   Status badges
+   -------------------------------------------------------------------------- */
+
+.status-badge {
+  width: fit-content;
+
+  border-radius: 999px;
+
+  padding: 2px 6px;
+
+  font-size: 10px;
+}
+
+.status-badge.danger {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.status-badge.success {
+  background: #dcfce7;
+  color: #166534;
+}
+
+/* --------------------------------------------------------------------------
+   Items
+   -------------------------------------------------------------------------- */
+
+.item-search {
+  width: min(360px, 100%);
+
+  margin-bottom: 14px;
+}
+
+.item-group + .item-group {
+  margin-top: 18px;
+}
+
+.item-group h3 {
+  margin: 0 0 4px;
+
+  padding-bottom: 7px;
+
+  border-bottom:
+    1px solid
+    var(--menu-border);
+
+  font-size: 13px;
+}
+
+.item-group h3 small {
+  color: var(--menu-muted);
+
+  font-weight: 400;
+}
+
+.item-row {
+  display: flex;
+
+  align-items: flex-start;
+  justify-content: space-between;
+
+  gap: 12px;
+
+  padding: 11px 0;
+
+  border-bottom:
+    1px solid
+    #f0f1f2;
+}
+
+.item-copy {
+  min-width: 0;
+
+  flex: 1;
+}
+
+.item-copy p {
+  margin: 4px 0 0;
+
+  color: var(--menu-muted);
+
+  font-size: 12px;
+}
+
+.item-title-line {
+  display: flex;
+  align-items: center;
+
+  gap: 8px;
+}
+
+.item-price {
+  margin-left: auto;
+
+  font-variant-numeric: tabular-nums;
+}
+
+.item-actions {
+  display: flex;
+
+  gap: 2px;
+}
+
+.empty-panel {
+  padding: 20px;
+
+  text-align: center;
+
+  color: var(--menu-muted);
+}
+
+/* --------------------------------------------------------------------------
+   Category tree
+   -------------------------------------------------------------------------- */
+
+.category-tree {
+  list-style: none;
+
+  padding-left: 0;
+
+  margin: 0;
+}
+
+.category-tree .category-tree {
+  padding-left: 24px;
+
+  margin-top: 4px;
+}
+
+.category-tree-node {
+  margin: 4px 0;
+}
+
+.category-node-row {
+  display: flex;
+  align-items: center;
+
+  gap: 4px;
+}
+
+.category-node-row .p-inputtext {
+  max-width: 320px;
+}
+
+/* --------------------------------------------------------------------------
+   Responsive
+   -------------------------------------------------------------------------- */
+
+@media (max-width: 860px) {
+  /*
+   * Restore normal document scrolling on smaller screens where
+   * sidebar and content are stacked vertically.
+   */
+  body {
+    overflow: auto;
+  }
+
+  .menu-dashboard-shell {
+    height: auto;
+
+    min-height: 100vh;
+    min-height: 100dvh;
+
+    grid-template-columns: 1fr;
+
+    overflow: visible;
+  }
+
+  .menu-sidebar {
+    width: 100%;
+
+    height: auto;
+
+    min-height: auto;
+
+    overflow: visible;
+  }
+
+  /*
+   * Don't let a very large menu list consume the entire mobile page.
+   * It gets its own small scroll region.
+   */
+  .sidebar-menu-list {
+    flex: none;
+
+    max-height: 40vh;
+
+    overflow-y: auto;
+  }
+
+  .sidebar-footer {
+    margin-top: 0;
+  }
+
+  .menu-dashboard-main {
+    height: auto;
+
+    min-height: 0;
+
+    padding: 18px;
+
+    overflow: visible;
+  }
+
+  .menu-dashboard-main > * {
+    max-width: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .menu-header,
+  .save-bar,
+  .card-heading.with-action {
+    flex-direction: column;
+  }
 }
