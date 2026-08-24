@@ -103,7 +103,7 @@ const userSecondaryLabel =
     <!-- Brand -->
     <div class="sidebar-brand">
       <strong>
-        Menu Board
+        TapMyMenu
       </strong>
 
       <span>
