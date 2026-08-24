@@ -463,6 +463,8 @@ onMounted(
           Log in to access your menus.
         </p>
 
+        <br>
+
         <button
           type="button"
           class="p-button p-component"
