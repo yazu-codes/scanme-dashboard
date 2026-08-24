@@ -1,65 +1,418 @@
 <script setup>
-import { computed, ref } from 'vue'
+import {
+  computed,
+  ref,
+} from 'vue'
+
 import Button from 'primevue/button'
-import InputText from 'primevue/inputtext'
-import { groupItemsByCategory, uid } from '@/utils/menuUtils'
-import MenuItemDialog from './MenuItemDialog.vue'
+import Message from 'primevue/message'
+
+import MenuItemDialog
+  from './MenuItemDialog.vue'
+
+import {
+  csvRowsToItems,
+  downloadCsv,
+  itemsToCsv,
+  parseCsv,
+} from '@/utils/csvUtils'
 
 const props = defineProps({
-  items: { type: Array, required: true },
-  menuId: { type: [Number, String], required: true },
-  token: { type: String, default: null },
+  items: {
+    type: Array,
+    default: () => [],
+  },
+
+  menuId: {
+    type: [
+      Number,
+      String,
+    ],
+    default: null,
+  },
+
+  menuName: {
+    type: String,
+    default: '',
+  },
+
+  menuSlug: {
+    type: String,
+    default: '',
+  },
+
+  token: {
+    type: String,
+    default: null,
+  },
 })
 
-const dialogVisible = ref(false)
-const editingKey = ref(null)
-const search = ref('')
+/*
+|--------------------------------------------------------------------------
+| Item dialog
+|--------------------------------------------------------------------------
+*/
 
-const filtered = computed(() => {
-  const q = search.value.trim().toLowerCase()
-  if (!q) return props.items
+const showItemDialog =
+  ref(false)
 
-  return props.items.filter(item =>
-    [item.name, item.name_en, item.category, item.description, item.allergens]
-      .some(value => String(value || '').toLowerCase().includes(q))
-  )
-})
+const editingItem =
+  ref(null)
 
-const groups = computed(() => groupItemsByCategory(filtered.value))
+/*
+|--------------------------------------------------------------------------
+| CSV
+|--------------------------------------------------------------------------
+*/
 
-const editingItem = computed(() =>
-  props.items.find(item => item._key === editingKey.value) || null
-)
+const csvInput =
+  ref(null)
 
-function openNew() {
-  editingKey.value = null
-  dialogVisible.value = true
+const csvMessage =
+  ref(null)
+
+const csvMessageSeverity =
+  ref('success')
+
+/*
+|--------------------------------------------------------------------------
+| Grouped items
+|--------------------------------------------------------------------------
+*/
+
+const groupedItems =
+  computed(() => {
+    const groups =
+      new Map()
+
+    for (
+      const item
+      of props.items
+    ) {
+      const category =
+        (
+          item.category ||
+          'Uncategorized'
+        ).trim() ||
+        'Uncategorized'
+
+      if (
+        !groups.has(
+          category
+        )
+      ) {
+        groups.set(
+          category,
+          []
+        )
+      }
+
+      groups
+        .get(category)
+        .push(item)
+    }
+
+    return Array.from(
+      groups.entries()
+    ).map(
+      ([category, items]) => ({
+        category,
+
+        items: [
+          ...items,
+        ].sort(
+          (a, b) =>
+            Number(
+              a.display_order_position ||
+              0
+            ) -
+            Number(
+              b.display_order_position ||
+              0
+            )
+        ),
+      })
+    )
+  })
+
+/*
+|--------------------------------------------------------------------------
+| Client-side key
+|--------------------------------------------------------------------------
+*/
+
+function uid() {
+  return Math
+    .random()
+    .toString(36)
+    .slice(2, 10)
 }
 
-function openEdit(item) {
-  editingKey.value = item._key
-  dialogVisible.value = true
+/*
+|--------------------------------------------------------------------------
+| Item CRUD
+|--------------------------------------------------------------------------
+*/
+
+function openCreateItem() {
+  editingItem.value =
+    null
+
+  showItemDialog.value =
+    true
 }
 
-function saveItem(values) {
-  if (editingKey.value) {
-    const item = props.items.find(row => row._key === editingKey.value)
-    if (item) Object.assign(item, values)
-  } else {
-    props.items.push({
-      _key: uid(),
-      menu_id: props.menuId,
-      ...values,
-    })
+function openEditItem(
+  item
+) {
+  editingItem.value =
+    item
+
+  showItemDialog.value =
+    true
+}
+
+function saveItem(
+  values
+) {
+  if (
+    editingItem.value
+  ) {
+    Object.assign(
+      editingItem.value,
+      values
+    )
+
+    return
   }
 
-  dialogVisible.value = false
+  props.items.push({
+    _key:
+      uid(),
+
+    menu_id:
+      props.menuId,
+
+    ...values,
+  })
 }
 
-function removeItem(item) {
-  if (!window.confirm(`Remove "${item.name}" from this menu draft?`)) return
-  const index = props.items.findIndex(row => row._key === item._key)
-  if (index >= 0) props.items.splice(index, 1)
+function deleteItem(
+  item
+) {
+  if (
+    !window.confirm(
+      `Remove "${item.name}" from this menu?`
+    )
+  ) {
+    return
+  }
+
+  const index =
+    props.items.findIndex(
+      candidate =>
+        candidate._key ===
+          item._key ||
+        (
+          item.id &&
+          candidate.id ===
+            item.id
+        )
+    )
+
+  if (index !== -1) {
+    props.items.splice(
+      index,
+      1
+    )
+  }
+}
+
+/*
+|--------------------------------------------------------------------------
+| CSV import
+|--------------------------------------------------------------------------
+*/
+
+function openCsvPicker() {
+  csvInput.value
+    ?.click()
+}
+
+async function handleCsvSelected(
+  event
+) {
+  const input =
+    event.target
+
+  const file =
+    input.files?.[0]
+
+  if (!file) {
+    return
+  }
+
+  csvMessage.value =
+    null
+
+  try {
+    /*
+     * Strip UTF-8 BOM if present.
+     */
+    let text =
+      await file.text()
+
+    text =
+      text.replace(
+        /^\uFEFF/,
+        ''
+      )
+
+    const rows =
+      parseCsv(text)
+
+    const importedItems =
+      csvRowsToItems(
+        rows,
+        props.items.length
+      )
+
+    if (
+      importedItems.length ===
+      0
+    ) {
+      csvMessageSeverity.value =
+        'error'
+
+      csvMessage.value =
+        'No valid rows found in that CSV. Check that the file contains a "name" column.'
+
+      return
+    }
+
+    /*
+     * Same behaviour as the reference HTML:
+     *
+     * imported rows are NEW draft items.
+     *
+     * There is no separate import API call.
+     * They will be persisted when the user presses
+     * the normal Save button for the menu.
+     */
+    for (
+      const values
+      of importedItems
+    ) {
+      props.items.push({
+        _key:
+          uid(),
+
+        menu_id:
+          props.menuId,
+
+        ...values,
+      })
+    }
+
+    csvMessageSeverity.value =
+      'success'
+
+    csvMessage.value =
+      `${importedItems.length} item${
+        importedItems.length === 1
+          ? ''
+          : 's'
+      } added from CSV. Save the menu to publish them.`
+  } catch (err) {
+    csvMessageSeverity.value =
+      'error'
+
+    csvMessage.value =
+      `Couldn't import CSV: ${err.message}`
+  } finally {
+    /*
+     * Reset so selecting the same file again
+     * still triggers change.
+     */
+    input.value = ''
+  }
+}
+
+/*
+|--------------------------------------------------------------------------
+| CSV export
+|--------------------------------------------------------------------------
+*/
+
+function exportCsv() {
+  csvMessage.value =
+    null
+
+  if (
+    !props.items.length
+  ) {
+    csvMessageSeverity.value =
+      'error'
+
+    csvMessage.value =
+      'No items to export.'
+
+    return
+  }
+
+  try {
+    const csv =
+      itemsToCsv(
+        props.items
+      )
+
+    const date =
+      new Date()
+        .toISOString()
+        .split('T')[0]
+
+    const baseName =
+      props.menuSlug ||
+      props.menuName ||
+      `menu-${props.menuId || 'items'}`
+
+    const safeName =
+      String(baseName)
+        .trim()
+        .replace(
+          /[^a-zA-Z0-9_-]+/g,
+          '-'
+        )
+        .replace(
+          /^-+|-+$/g,
+          ''
+        ) ||
+      'menu'
+
+    const filename =
+      `${safeName}_items_${date}.csv`
+
+    downloadCsv(
+      csv,
+      filename
+    )
+
+    csvMessageSeverity.value =
+      'success'
+
+    csvMessage.value =
+      `Exported ${props.items.length} item${
+        props.items.length === 1
+          ? ''
+          : 's'
+      } to CSV.`
+  } catch (err) {
+    csvMessageSeverity.value =
+      'error'
+
+    csvMessage.value =
+      `Couldn't export CSV: ${err.message}`
+  }
 }
 </script>
 
@@ -67,45 +420,179 @@ function removeItem(item) {
   <section class="dashboard-card">
     <div class="card-heading with-action">
       <div>
-        <h2>Menu items</h2>
-        <span>{{ items.length }} total</span>
+        <h2>
+          Menu items
+        </h2>
+
+        <span>
+          {{
+            items.length
+          }}
+          item{{
+            items.length === 1
+              ? ''
+              : 's'
+          }}
+        </span>
       </div>
 
-      <Button label="Add item" icon="pi pi-plus" size="small" @click="openNew" />
+      <div class="menu-items-actions">
+        <Button
+          label="Add item"
+          icon="pi pi-plus"
+          size="small"
+          @click="openCreateItem"
+        />
+
+        <Button
+          label="Import CSV"
+          icon="pi pi-upload"
+          severity="secondary"
+          outlined
+          size="small"
+          @click="openCsvPicker"
+        />
+
+        <Button
+          label="Export CSV"
+          icon="pi pi-download"
+          severity="secondary"
+          outlined
+          size="small"
+          :disabled="!items.length"
+          @click="exportCsv"
+        />
+
+        <input
+          ref="csvInput"
+          type="file"
+          accept=".csv,text/csv"
+          hidden
+          @change="handleCsvSelected"
+        />
+      </div>
     </div>
 
-    <InputText v-model="search" placeholder="Search items..." class="item-search" />
+    <Message
+      v-if="csvMessage"
+      :severity="csvMessageSeverity"
+      closable
+      @close="
+        csvMessage = null
+      "
+    >
+      {{ csvMessage }}
+    </Message>
 
-    <div v-for="group in groups" :key="group.name" class="item-group">
-      <h3>{{ group.name }} <small>{{ group.items.length }}</small></h3>
+    <div
+      v-if="!items.length"
+      class="empty-panel"
+    >
+      No menu items yet.
+    </div>
 
-      <div v-for="item in group.items" :key="item._key" class="item-row">
-        <div class="item-copy">
-          <div class="item-title-line">
-            <strong>{{ item.name }}</strong>
-            <span v-if="!item.id" class="status-badge success">New</span>
-            <span class="item-price">{{ Number(item.price || 0).toFixed(2) }}</span>
+    <div
+      v-for="group in groupedItems"
+      v-else
+      :key="group.category"
+      class="menu-item-category"
+    >
+      <div class="menu-item-category-heading">
+        <strong>
+          {{ group.category }}
+        </strong>
+
+        <span>
+          {{ group.items.length }}
+        </span>
+      </div>
+
+      <div
+        v-for="item in group.items"
+        :key="
+          item._key ||
+          item.id
+        "
+        class="menu-item-row"
+      >
+        <div class="menu-item-main">
+          <div class="menu-item-title-row">
+            <strong>
+              {{ item.name }}
+            </strong>
+
+            <span
+              v-if="!item.id"
+              class="new-badge"
+            >
+              New
+            </span>
+
+            <span class="menu-item-leader" />
+
+            <span class="menu-item-price">
+              {{
+                Number(
+                  item.price || 0
+                ).toFixed(2)
+              }}
+            </span>
           </div>
-          <p v-if="item.description">{{ item.description }}</p>
+
+          <small
+            v-if="item.description"
+          >
+            {{ item.description }}
+          </small>
         </div>
 
-        <div class="item-actions">
-          <Button icon="pi pi-pencil" text rounded @click="openEdit(item)" />
-          <Button icon="pi pi-trash" severity="danger" text rounded @click="removeItem(item)" />
+        <div class="menu-item-actions">
+          <Button
+            icon="pi pi-pencil"
+            text
+            rounded
+            size="small"
+            aria-label="Edit item"
+            @click="
+              openEditItem(
+                item
+              )
+            "
+          />
+
+          <Button
+            icon="pi pi-trash"
+            severity="danger"
+            text
+            rounded
+            size="small"
+            aria-label="Delete item"
+            @click="
+              deleteItem(
+                item
+              )
+            "
+          />
         </div>
       </div>
-    </div>
-
-    <div v-if="!groups.length" class="empty-panel">
-      No items found.
     </div>
 
     <MenuItemDialog
-      v-model:visible="dialogVisible"
-      :item="editingItem"
-      :menu-id="menuId"
-      :token="token"
-      @save="saveItem"
+      v-model:visible="
+        showItemDialog
+      "
+      :item="
+        editingItem
+      "
+      :menu-id="
+        menuId
+      "
+      :token="
+        token
+      "
+      @save="
+        saveItem
+      "
     />
   </section>
 </template>

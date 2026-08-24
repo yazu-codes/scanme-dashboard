@@ -574,6 +574,22 @@ onMounted(
                 .value
                 .id
             "
+            :menu-name="
+              dashboard
+                .draftMenu
+                .value
+                ?.menu_owner
+                ?.menu_owner_name ||
+              ''
+            "
+            :menu-slug="
+              dashboard
+                .draftMenu
+                .value
+                ?.menu_owner
+                ?.menu_owner_url_name ||
+              ''
+            "
             :token="
               dashboard
                 .authToken
