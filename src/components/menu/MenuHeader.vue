@@ -4,6 +4,10 @@ import Button from 'primevue/button'
 defineProps({
   menu: { type: Object, required: true },
   dirty: Boolean,
+  isAdmin: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 const emit = defineEmits(['toggle-suspended', 'delete'])
@@ -13,11 +17,12 @@ const emit = defineEmits(['toggle-suspended', 'delete'])
   <header class="menu-header">
     <div>
       <h1>{{ menu.menu_owner?.menu_owner_name || 'Unnamed menu' }}</h1>
-      <p>Menu #{{ menu.id }}</p>
+      <p v-if="isAdmin">Menu #{{ menu.id }}</p>
     </div>
 
     <div class="menu-header-actions">
       <Button
+        v-if="isAdmin"
         :label="menu.suspended ? 'Enable menu' : 'Suspend menu'"
         :icon="menu.suspended ? 'pi pi-play' : 'pi pi-pause'"
         outlined
@@ -26,6 +31,7 @@ const emit = defineEmits(['toggle-suspended', 'delete'])
       />
 
       <Button
+        v-if="isAdmin"
         label="Delete menu"
         icon="pi pi-trash"
         severity="danger"

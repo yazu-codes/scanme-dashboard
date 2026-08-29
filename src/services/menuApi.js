@@ -68,6 +68,9 @@ export function createMenuApi({
      * isn't allowed to perform this operation.
      */
     if (response.status === 403) {
+      const body =
+          await response.json()
+      console.log(body.error)
       throw new Error(
         'You are not authorized to perform this action.'
       )

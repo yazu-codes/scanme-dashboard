@@ -8,6 +8,10 @@ import Button from 'primevue/button'
 import InputText from 'primevue/inputtext'
 
 const props = defineProps({
+  isAdmin: {
+    type: Boolean,
+    default: false,
+  },
   menus: {
     type: Array,
     default: () => [],
@@ -113,7 +117,7 @@ const userSecondaryLabel =
 
     <!-- Create -->
     <Button
-      v-if="loggedIn"
+      v-if="loggedIn && isAdmin"
       label="New menu"
       icon="pi pi-plus"
       class="w-full"
@@ -155,7 +159,7 @@ const userSecondaryLabel =
             {{ ownerName(menu) }}
           </strong>
 
-          <small>
+          <small v-if="isAdmin">
             #{{ menu.id }}
 
             ·
@@ -176,6 +180,7 @@ const userSecondaryLabel =
         </div>
 
         <button
+          v-if="isAdmin"
           type="button"
           class="yumm-chip"
           :class="{
@@ -214,7 +219,7 @@ const userSecondaryLabel =
     <!-- Footer -->
     <div class="sidebar-footer">
       <!-- Management -->
-      <template v-if="loggedIn">
+      <template v-if="loggedIn && isAdmin">
         <Button
           label="Manage images"
           icon="pi pi-images"
@@ -329,40 +334,6 @@ const userSecondaryLabel =
               loggedIn
                 ? 'logout'
                 : 'login'
-            )
-          "
-        />
-      </div>
-
-      <!-- API configuration -->
-      <Button
-        label="API connection"
-        icon="pi pi-cog"
-        text
-        class="w-full justify-start"
-        @click="
-          showApi =
-            !showApi
-        "
-      />
-
-      <div
-        v-if="showApi"
-        class="api-settings"
-      >
-        <InputText
-          v-model="localBase"
-          class="w-full"
-        />
-
-        <Button
-          label="Apply"
-          size="small"
-          class="w-full"
-          @click="
-            emit(
-              'save-api-base',
-              localBase
             )
           "
         />

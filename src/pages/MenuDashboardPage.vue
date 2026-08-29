@@ -125,6 +125,10 @@ const items =
       []
   )
 
+const isAdmin = computed(
+  () => dashboard.currentUser.value?.role === 'admin'
+)
+
 /*
 |--------------------------------------------------------------------------
 | Login
@@ -357,57 +361,24 @@ onMounted(
   <div class="menu-dashboard-shell">
     <!-- Sidebar -->
     <MenuSidebar
-      :menus="
-        dashboard.menus.value
-      "
+      :menus="dashboard.menus.value"
       :current-menu-id="
-        dashboard
-          .currentMenu
-          .value
-          ?.id
+        dashboard.currentMenu.value?.id
       "
-      :logged-in="
-        dashboard
-          .loggedIn
-          .value
-      "
-      :current-user="
-        dashboard
-          .currentUser
-          .value
-      "
-      :api-base="
-        dashboard
-          .apiBase
-          .value
-      "
-      @select="
-        dashboard.selectMenu
-      "
-      @new-menu="
-        showNewMenu = true
-      "
-      @toggle-yumm="
-        handleYumm
-      "
-      @login="
-        showLogin = true
-      "
-      @logout="
-        handleLogout
-      "
-      @save-api-base="
-        handleApiBase
-      "
-      @open-codes="
-        showCodes = true
-      "
-      @open-images="
-        showImages = true
-      "
-      @open-users="
-        showSignupUser = true
-      "
+      :logged-in="dashboard.loggedIn.value"
+      :current-user="dashboard.currentUser.value"
+      :is-admin="isAdmin"
+      :api-base="dashboard.apiBase.value"
+
+      @select="dashboard.selectMenu"
+      @new-menu="showNewMenu = true"
+      @toggle-yumm="handleYumm"
+      @login="showLogin = true"
+      @logout="handleLogout"
+      @save-api-base="handleApiBase"
+      @open-codes="showCodes = true"
+      @open-images="showImages = true"
+      @open-users="showSignupUser = true"
       @open-menu-associations="
         showMenuAssociations = true
       "
@@ -534,6 +505,7 @@ onMounted(
                 .dirty
                 .value
             "
+            :is-admin="isAdmin"
             @toggle-suspended="
               handleSuspend
             "
