@@ -518,6 +518,7 @@ onMounted(
           <MenuOwnerForm
             v-if="owner"
             :owner="owner"
+            :is-admin="isAdmin"
           />
 
           <!-- Configuration -->
@@ -529,6 +530,7 @@ onMounted(
                 ?.menu_owner_name ||
               ''
             "
+            :is-admin="isAdmin"
           />
 
           <!-- Category order -->

@@ -1,11 +1,23 @@
 <script setup>
 import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
+import Dropdown from 'primevue/dropdown'
 
 defineProps({
   config: { type: Object, required: true },
   ownerName: { type: String, default: '' },
+  isAdmin: {
+    type: Boolean,
+    default: false,
+  },
 })
+
+const themeOptions = [
+  { label: 'Luxury', value: 'luxury' },
+  { label: 'Classic', value: 'classic' },
+  { label: 'Minimal', value: 'minimal' },
+  { label: 'Modern', value: 'modern' },
+]
 </script>
 
 <template>
@@ -39,7 +51,24 @@ defineProps({
 
       <label class="field">
         <span>Font size</span>
-        <InputNumber v-model="config.font_size" :min="8" :max="72" suffix=" px" />
+        <InputNumber
+          v-model="config.font_size"
+          :min="8"
+          :max="72"
+          suffix=" px"
+        />
+      </label>
+
+      <label class="field" v-if="isAdmin">
+        <span>Theme</span>
+
+        <Dropdown
+          v-model="config.theme"
+          :options="themeOptions"
+          optionLabel="label"
+          optionValue="value"
+          placeholder="Select a theme"
+        />
       </label>
     </div>
 

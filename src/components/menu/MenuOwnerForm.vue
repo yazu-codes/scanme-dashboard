@@ -4,6 +4,10 @@ import Textarea from 'primevue/textarea'
 
 defineProps({
   owner: { type: Object, required: true },
+  isAdmin: {
+    type: Boolean,
+    default: false,
+  },
 })
 </script>
 
@@ -15,12 +19,12 @@ defineProps({
     </div>
 
     <div class="form-grid">
-      <label class="field">
+      <label class="field" v-if="isAdmin">
         <span>Name</span>
         <InputText v-model="owner.menu_owner_name" />
       </label>
 
-      <label class="field">
+      <label class="field" v-if="isAdmin">
         <span>URL name</span>
         <InputText v-model="owner.menu_owner_url_name" />
       </label>
