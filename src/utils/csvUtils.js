@@ -113,6 +113,36 @@ export function parseCsv(text) {
 
 /*
 |--------------------------------------------------------------------------
+| Parse a CSV boolean cell
+|--------------------------------------------------------------------------
+|
+| Accepts common human-entered variants so hand-edited
+| spreadsheets don't break the import. Empty/missing
+| defaults to true (enabled) to match the "enabled: true"
+| default used everywhere else in the app.
+|
+*/
+
+function parseCsvBoolean(raw) {
+  const value =
+    (raw ?? '')
+      .trim()
+      .toLowerCase()
+
+  if (value === '') {
+    return true
+  }
+
+  return [
+    'true',
+    '1',
+    'yes',
+    'y',
+  ].includes(value)
+}
+
+/*
+|--------------------------------------------------------------------------
 | CSV rows -> menu items
 |--------------------------------------------------------------------------
 */
@@ -196,6 +226,13 @@ export function csvRowsToItems(
       'order',
       'display_order',
     ],
+
+    enabled: [
+      'enabled',
+      'active',
+      'is enabled',
+      'is active',
+    ],
   }
 
   function findColumn(field) {
@@ -243,6 +280,9 @@ export function csvRowsToItems(
       findColumn(
         'display_order_position'
       ),
+
+    enabled:
+      findColumn('enabled'),
   }
 
   if (
@@ -366,6 +406,13 @@ export function csvRowsToItems(
               startOrder +
               items.length
             ),
+
+      enabled:
+        parseCsvBoolean(
+          get(
+            columns.enabled
+          )
+        ),
     })
   }
 
@@ -429,6 +476,7 @@ export function itemsToCsv(
     'description_en',
     'picture_url',
     'display_order_position',
+    'enabled',
   ]
 
   const rows = [
@@ -476,6 +524,12 @@ export function itemsToCsv(
         item
           .display_order_position ??
         ''
+      ),
+
+      escapeCsvField(
+        item.enabled === false
+          ? 'false'
+          : 'true'
       ),
     ])
   }

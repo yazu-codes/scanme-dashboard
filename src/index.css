@@ -3,6 +3,7 @@
 @tailwind components;
 @tailwind utilities;
 
+
 :root {
   --bg: #F7F8FA;
   --surface: #FFFFFF;

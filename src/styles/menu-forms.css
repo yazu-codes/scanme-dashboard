@@ -4,6 +4,8 @@
   gap: 14px;
 }
 
+
+
 .form-grid.one-column {
   grid-template-columns: 1fr;
 }
@@ -170,6 +172,18 @@
   font-size: 9px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+
+.checkbox-field {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+
+.checkbox {
+  border: 1px solid black;
 }
 
 @media (max-width: 720px) {

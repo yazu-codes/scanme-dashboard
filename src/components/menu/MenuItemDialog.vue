@@ -2,6 +2,7 @@
 import { reactive, watch, ref } from 'vue'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
+import Checkbox from 'primevue/checkbox'
 import InputNumber from 'primevue/inputnumber'
 import Textarea from 'primevue/textarea'
 import Button from 'primevue/button'
@@ -29,12 +30,13 @@ const form = reactive({
   description_en: '',
   picture_url: '',
   display_order_position: 0,
+  enabled: true,
 })
 
 watch(
-  () => [props.visible, props.item],
-  () => {
-    if (!props.visible) return
+  () => props.visible,
+  (isVisible) => {
+    if (!isVisible) return
 
     Object.assign(form, {
       name: props.item?.name || '',
@@ -46,6 +48,7 @@ watch(
       description_en: props.item?.description_en || '',
       picture_url: props.item?.picture_url || '',
       display_order_position: Number(props.item?.display_order_position || 0),
+      enabled: props.item?.enabled === undefined ? true : Boolean(props.item.enabled),
     })
 
     selectedFile.value = null
@@ -80,7 +83,7 @@ async function submit() {
     }
   }
 
-  emit('save', {
+  const payload = {
     name: form.name.trim(),
     name_en: form.name_en.trim(),
     price: Number(form.price || 0),
@@ -90,7 +93,11 @@ async function submit() {
     description_en: form.description_en.trim(),
     picture_url: pictureUrl,
     display_order_position: Number(form.display_order_position || 0),
-  })
+    enabled: Boolean(form.enabled),
+  }
+
+  emit('save', payload)
+  emit('update:visible', false)
 }
 </script>
 
@@ -152,6 +159,12 @@ async function submit() {
         <span>Or upload image</span>
         <input type="file" accept="image/*" @change="selectedFile = $event.target.files?.[0] || null">
       </label>
+
+      <div class="field field-full checkbox-field">
+        <Checkbox v-model="form.enabled" binary inputId="enabled" />
+        <label for="enabled">Enabled</label>
+        <span class="help-text">Check to enable the item</span>
+      </div>
     </div>
 
     <template #footer>
@@ -160,3 +173,11 @@ async function submit() {
     </template>
   </Dialog>
 </template>
+
+<style scoped>
+.checkbox-field {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+</style>
