@@ -233,6 +233,21 @@ function deleteItem(
   }
 }
 
+function enableAllItems() {
+  if (
+    !props.items.length
+  ) {
+    return
+  }
+
+  for (
+    const item
+    of props.items
+  ) {
+    item.enabled = true
+  }
+}
+
 function deleteAllItems() {
   if (
     !props.items.length
@@ -492,6 +507,17 @@ function exportCsv() {
           size="small"
           :disabled="!items.length"
           @click="exportCsv"
+        />
+
+        <Button
+          v-if="isAdmin"
+          label="Enable all"
+          icon="pi pi-check-circle"
+          severity="success"
+          outlined
+          size="small"
+          :disabled="!items.length"
+          @click="enableAllItems"
         />
 
         <Button
