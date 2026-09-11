@@ -45,6 +45,11 @@ const props = defineProps({
     type: String,
     default: null,
   },
+
+  isAdmin: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 /*
@@ -226,6 +231,32 @@ function deleteItem(
       1
     )
   }
+}
+
+function deleteAllItems() {
+  if (
+    !props.items.length
+  ) {
+    return
+  }
+
+  const confirmed =
+    window.confirm(
+      `Delete all ${props.items.length} item${
+        props.items.length === 1
+          ? ''
+          : 's'
+      } from this menu? This cannot be undone.`
+    )
+
+  if (!confirmed) {
+    return
+  }
+
+  props.items.splice(
+    0,
+    props.items.length
+  )
 }
 
 /*
@@ -461,6 +492,17 @@ function exportCsv() {
           size="small"
           :disabled="!items.length"
           @click="exportCsv"
+        />
+
+        <Button
+          v-if="isAdmin"
+          label="Delete all"
+          icon="pi pi-trash"
+          severity="danger"
+          outlined
+          size="small"
+          :disabled="!items.length"
+          @click="deleteAllItems"
         />
 
         <input

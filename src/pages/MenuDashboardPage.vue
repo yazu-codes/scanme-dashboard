@@ -571,6 +571,7 @@ onMounted(
                 .authToken
                 .value
             "
+            :is-admin="isAdmin"
           />
         </template>
 
