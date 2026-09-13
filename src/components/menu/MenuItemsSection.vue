@@ -626,6 +626,7 @@ function exportCsv() {
       />
 
       <Button
+        v-if="isAdmin"
         label="Import CSV"
         icon="pi pi-upload"
         severity="secondary"
@@ -635,6 +636,7 @@ function exportCsv() {
       />
 
       <Button
+        v-if="isAdmin"
         label="Export CSV"
         icon="pi pi-download"
         severity="secondary"
@@ -685,6 +687,7 @@ function exportCsv() {
       />
 
       <input
+        v-if="isAdmin"
         ref="csvInput"
         type="file"
         accept=".csv,text/csv"
