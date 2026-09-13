@@ -231,6 +231,26 @@ const anyCategoryOpen =
         )
   )
 
+/*
+ * Categories already in use, for the dialog's picker.
+ * Sorted so the list doesn't reorder itself as items
+ * move around.
+ */
+const categoryOptions =
+  computed(() =>
+    Array.from(
+      new Set(
+        props.items.map(
+          item =>
+            categoryOf(item)
+        )
+      )
+    ).sort(
+      (a, b) =>
+        a.localeCompare(b)
+    )
+  )
+
 function toggleAllCategories() {
   if (
     anyCategoryOpen.value
@@ -854,6 +874,9 @@ function exportCsv() {
       "
       :menu-id="
         menuId
+      "
+      :categories="
+        categoryOptions
       "
       :token="
         token

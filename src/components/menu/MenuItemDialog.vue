@@ -1,7 +1,8 @@
 <script setup>
-import { reactive, watch, ref } from 'vue'
+import { computed, reactive, watch, ref } from 'vue'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
+import AutoComplete from 'primevue/autocomplete'
 import Checkbox from 'primevue/checkbox'
 import InputNumber from 'primevue/inputnumber'
 import Textarea from 'primevue/textarea'
@@ -13,6 +14,11 @@ const props = defineProps({
   item: { type: Object, default: null },
   menuId: { type: [Number, String], required: true },
   token: { type: String, default: null },
+
+  /*
+   * Categories already used elsewhere in this menu.
+   */
+  categories: { type: Array, default: () => [] },
 })
 
 const emit = defineEmits(['update:visible', 'save'])
@@ -33,6 +39,35 @@ const form = reactive({
   enabled: true,
 })
 
+/*
+|--------------------------------------------------------------------------
+| Category picker
+|--------------------------------------------------------------------------
+|
+| Pick an existing category or type a new one - a closed
+| list would make the first item of a new category
+| impossible to create.
+|
+*/
+
+const categorySuggestions = ref([])
+
+const knownCategories = computed(() =>
+  props.categories
+    .map((category) => String(category))
+    .filter(Boolean)
+)
+
+function searchCategories(event) {
+  const query = (event.query || '').trim().toLowerCase()
+
+  categorySuggestions.value = query
+    ? knownCategories.value.filter((category) =>
+        category.toLowerCase().includes(query)
+      )
+    : [...knownCategories.value]
+}
+
 watch(
   () => props.visible,
   (isVisible) => {
@@ -52,6 +87,7 @@ watch(
     })
 
     selectedFile.value = null
+    categorySuggestions.value = [...knownCategories.value]
   },
   { immediate: true }
 )
@@ -87,7 +123,11 @@ async function submit() {
     name: form.name.trim(),
     name_en: form.name_en.trim(),
     price: Number(form.price || 0),
-    category: form.category.trim(),
+    /*
+     * Clearing the picker leaves null rather than '',
+     * so this can't go straight to .trim().
+     */
+    category: String(form.category || '').trim(),
     allergens: form.allergens.trim(),
     description: form.description.trim(),
     description_en: form.description_en.trim(),
@@ -130,9 +170,16 @@ async function submit() {
         <InputNumber v-model="form.display_order_position" :min="0" />
       </label>
 
-      <label class="field">
+      <label class="field category-field">
         <span>Category</span>
-        <InputText v-model="form.category" />
+        <AutoComplete
+          v-model="form.category"
+          :suggestions="categorySuggestions"
+          dropdown
+          completeOnFocus
+          placeholder="Choose one or type a new name"
+          @complete="searchCategories"
+        />
       </label>
 
       <label class="field">
@@ -179,5 +226,18 @@ async function submit() {
   flex-direction: row;
   align-items: center;
   gap: 0.5rem;
+}
+
+/*
+ * AutoComplete renders a wrapper around its input, so
+ * without this it won't fill the field like the plain
+ * InputText beside it.
+ */
+.category-field :deep(.p-autocomplete) {
+  width: 100%;
+}
+
+.category-field :deep(.p-autocomplete-input) {
+  width: 100%;
 }
 </style>
