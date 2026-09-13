@@ -479,7 +479,42 @@ onMounted(
       @open-menu-associations="
         showMenuAssociations = true
       "
-    />
+    >
+      <!--
+        Mobile only: the bar is the one thing on screen
+        at all times, so the section controls ride along
+        with it instead of scrolling away.
+      -->
+      <template #topbar-actions>
+        <template
+          v-if="
+            dashboard
+              .draftMenu
+              .value
+          "
+        >
+          <Button
+            icon="pi pi-angle-double-down"
+            text
+            rounded
+            aria-label="Expand all sections"
+            @click="
+              setAllSections(true)
+            "
+          />
+
+          <Button
+            icon="pi pi-angle-double-up"
+            text
+            rounded
+            aria-label="Collapse all sections"
+            @click="
+              setAllSections(false)
+            "
+          />
+        </template>
+      </template>
+    </MenuSidebar>
 
     <!-- Main -->
     <main class="menu-dashboard-main">
@@ -874,5 +909,15 @@ onMounted(
   justify-content: flex-end;
   gap: 0.25rem;
   margin-bottom: 0.5rem;
+}
+
+/*
+ * Same breakpoint as the sidebar drawer: below it these
+ * live in the sticky bar instead.
+ */
+@media (max-width: 900px) {
+  .section-controls {
+    display: none;
+  }
 }
 </style>

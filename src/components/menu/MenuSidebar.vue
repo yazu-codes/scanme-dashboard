@@ -277,23 +277,75 @@ const userSecondaryLabel =
 
     return 'Logged in'
   }
+
+/*
+|--------------------------------------------------------------------------
+| Mobile top bar
+|--------------------------------------------------------------------------
+*/
+
+const currentMenu =
+  computed(() =>
+    props.menus.find(
+      menu =>
+        String(menu.id) ===
+        String(props.currentMenuId)
+    )
+  )
+
+const currentMenuLabel =
+  computed(() => {
+    if (
+      currentMenu.value
+    ) {
+      return ownerName(
+        currentMenu.value
+      )
+    }
+
+    return props.loggedIn
+      ? 'No menu selected'
+      : 'Not logged in'
+  })
 </script>
 
 <template>
-  <!-- Hamburger, small screens only -->
-  <Button
+  <!--
+    Small screens only. The toggle is its own button so
+    the bar can hold other controls beside it.
+  -->
+  <div
     v-if="showToggle"
-    class="sidebar-toggle"
+    class="sidebar-topbar"
     :class="{
       'is-hidden': isOpen,
     }"
-    icon="pi pi-bars"
-    rounded
-    aria-label="Show menus"
-    :aria-expanded="isOpen"
-    aria-controls="menu-sidebar"
-    @click="toggleDrawer"
-  />
+  >
+    <button
+      type="button"
+      class="sidebar-topbar-toggle"
+      aria-label="Show menus"
+      :aria-expanded="isOpen"
+      aria-controls="menu-sidebar"
+      @click="toggleDrawer"
+    >
+      <i
+        class="pi pi-bars"
+        aria-hidden="true"
+      />
+
+      <span class="sidebar-topbar-title">
+        {{ currentMenuLabel }}
+      </span>
+    </button>
+
+    <div
+      v-if="$slots['topbar-actions']"
+      class="sidebar-topbar-actions"
+    >
+      <slot name="topbar-actions" />
+    </div>
+  </div>
 
   <!-- Tap-anywhere-else to close -->
   <div
@@ -564,29 +616,73 @@ const userSecondaryLabel =
  * the drawer controls are hidden and .menu-sidebar
  * is left entirely to your global stylesheet.
  */
-.sidebar-toggle,
+.sidebar-topbar,
 .sidebar-close,
 .sidebar-backdrop {
   display: none;
 }
 
 @media (max-width: 900px) {
-  .sidebar-toggle {
-    display: inline-flex;
+  .sidebar-topbar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
     position: fixed;
-    top: 0.75rem;
-    left: 0.75rem;
+    top: 0;
+    left: 0;
+    right: 0;
     z-index: 41;
+    min-height: 3rem;
+    padding: 0.5rem 0.85rem;
+    /*
+     * A bar over scrolling content can't be
+     * transparent. These two are the only colours the
+     * component sets - swap them for your own tokens
+     * if they don't match.
+     */
+    background: var(--p-content-background, #fff);
+    border-bottom: 1px solid
+      var(--p-content-border-color, rgba(0, 0, 0, 0.12));
     transition:
       opacity 0.16s ease,
       visibility 0.16s ease;
+  }
+
+  .sidebar-topbar-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0;
+    background: none;
+    border: 0;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .sidebar-topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex: 0 0 auto;
+  }
+
+  .sidebar-topbar-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
   }
 
   /*
    * Out of sight and out of the tab order once the
    * drawer takes over; the close button replaces it.
    */
-  .sidebar-toggle.is-hidden {
+  .sidebar-topbar.is-hidden {
     opacity: 0;
     visibility: hidden;
   }
@@ -643,7 +739,7 @@ const userSecondaryLabel =
 @media (prefers-reduced-motion: reduce) {
   .menu-sidebar,
   .sidebar-backdrop,
-  .sidebar-toggle {
+  .sidebar-topbar {
     transition: none;
   }
 }
