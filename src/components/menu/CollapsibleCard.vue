@@ -342,7 +342,13 @@ const bodyId =
   box-shadow: none;
 }
 
-.is-flush .collapsible-content :deep(.card-heading) {
+/*
+ * Hides the wrapped card's title, since this component
+ * already shows one - but NOT the whole heading, which
+ * is where sections tend to keep their action buttons.
+ */
+.is-flush .collapsible-content :deep(.card-heading > h2),
+.is-flush .collapsible-content :deep(.card-heading > div:has(> h2)) {
   display: none;
 }
 
