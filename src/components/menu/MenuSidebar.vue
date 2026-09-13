@@ -1,11 +1,13 @@
 <script setup>
 import {
+  computed,
+  onBeforeUnmount,
+  onMounted,
   ref,
   watch,
 } from 'vue'
 
 import Button from 'primevue/button'
-import InputText from 'primevue/inputtext'
 
 const props = defineProps({
   isAdmin: {
@@ -39,6 +41,39 @@ const props = defineProps({
     type: String,
     default: '',
   },
+
+  /*
+   * Leave this alone and the sidebar manages its own
+   * drawer. Pass it (v-model:open) and the parent takes
+   * over, which is what you want if the hamburger lives
+   * in MenuHeader instead.
+   */
+  open: {
+    type: [
+      Boolean,
+      null,
+    ],
+    default: null,
+  },
+
+  /*
+   * Turn off when something else already renders a
+   * hamburger, so you don't end up with two.
+   */
+  showToggle: {
+    type: Boolean,
+    default: true,
+  },
+
+  /*
+   * Whether the drawer starts open. Only affects narrow
+   * screens; the sidebar is always visible above the
+   * breakpoint either way.
+   */
+  defaultOpen: {
+    type: Boolean,
+    default: true,
+  },
 })
 
 const emit = defineEmits([
@@ -54,7 +89,9 @@ const emit = defineEmits([
   'open-codes',
   'open-images',
   'open-users',
-  'open-menu-associations'
+  'open-menu-associations',
+
+  'update:open',
 ])
 
 const showApi =
@@ -72,6 +109,146 @@ watch(
       value
   }
 )
+
+/*
+|--------------------------------------------------------------------------
+| Drawer
+|--------------------------------------------------------------------------
+|
+| Only does anything below the breakpoint in the style
+| block. On wide screens the sidebar is always visible
+| and these flags are ignored.
+|
+*/
+
+const internalOpen =
+  ref(
+    props.defaultOpen
+  )
+
+const isOpen =
+  computed(() =>
+    props.open === null
+      ? internalOpen.value
+      : props.open
+  )
+
+function setOpen(
+  value
+) {
+  internalOpen.value =
+    value
+
+  emit(
+    'update:open',
+    value
+  )
+}
+
+function closeDrawer() {
+  setOpen(false)
+}
+
+function toggleDrawer() {
+  setOpen(
+    !isOpen.value
+  )
+}
+
+/*
+ * Stops the page behind the drawer from scrolling
+ * under your finger.
+ *
+ * Guarded by the viewport width because the drawer can
+ * start open, and above the breakpoint the sidebar is
+ * just a column - locking the page there would be a bug.
+ *
+ * Keep this width in step with the media query below.
+ */
+function isDrawerLayout() {
+  return window
+    .matchMedia(
+      '(max-width: 900px)'
+    )
+    .matches
+}
+
+watch(
+  isOpen,
+  value => {
+    document
+      .body
+      .classList
+      .toggle(
+        'sidebar-drawer-open',
+        value &&
+        isDrawerLayout()
+      )
+  },
+  {
+    immediate: true,
+  }
+)
+
+function handleKeydown(
+  event
+) {
+  if (
+    event.key === 'Escape' &&
+    isOpen.value
+  ) {
+    closeDrawer()
+  }
+}
+
+onMounted(() => {
+  document
+    .addEventListener(
+      'keydown',
+      handleKeydown
+    )
+})
+
+onBeforeUnmount(() => {
+  document
+    .removeEventListener(
+      'keydown',
+      handleKeydown
+    )
+
+  document
+    .body
+    .classList
+    .remove(
+      'sidebar-drawer-open'
+    )
+})
+
+/*
+|--------------------------------------------------------------------------
+| Emitting + closing
+|--------------------------------------------------------------------------
+|
+| Every action in the drawer navigates somewhere or
+| opens a dialog, so the drawer should get out of the
+| way afterwards.
+|
+*/
+
+function emitAndClose(
+  event,
+  payload
+) {
+  if (
+    payload === undefined
+  ) {
+    emit(event)
+  } else {
+    emit(event, payload)
+  }
+
+  closeDrawer()
+}
 
 const ownerName =
   menu =>
@@ -103,7 +280,46 @@ const userSecondaryLabel =
 </script>
 
 <template>
-  <aside class="menu-sidebar">
+  <!-- Hamburger, small screens only -->
+  <Button
+    v-if="showToggle"
+    class="sidebar-toggle"
+    :class="{
+      'is-hidden': isOpen,
+    }"
+    icon="pi pi-bars"
+    rounded
+    aria-label="Show menus"
+    :aria-expanded="isOpen"
+    aria-controls="menu-sidebar"
+    @click="toggleDrawer"
+  />
+
+  <!-- Tap-anywhere-else to close -->
+  <div
+    class="sidebar-backdrop"
+    :class="{
+      'is-visible': isOpen,
+    }"
+    @click="closeDrawer"
+  />
+
+  <aside
+    id="menu-sidebar"
+    class="menu-sidebar"
+    :class="{
+      'is-open': isOpen,
+    }"
+  >
+    <Button
+      class="sidebar-close"
+      icon="pi pi-times"
+      text
+      rounded
+      aria-label="Hide menus"
+      @click="closeDrawer"
+    />
+
     <!-- Brand -->
     <div class="sidebar-brand">
       <strong>
@@ -122,7 +338,7 @@ const userSecondaryLabel =
       icon="pi pi-plus"
       class="w-full"
       @click="
-        emit(
+        emitAndClose(
           'new-menu'
         )
       "
@@ -142,13 +358,13 @@ const userSecondaryLabel =
             String(currentMenuId)
         }"
         @click="
-          emit(
+          emitAndClose(
             'select',
             menu.id
           )
         "
         @keydown.enter="
-          emit(
+          emitAndClose(
             'select',
             menu.id
           )
@@ -226,7 +442,7 @@ const userSecondaryLabel =
           text
           class="w-full justify-start"
           @click="
-            emit(
+            emitAndClose(
               'open-images'
             )
           "
@@ -238,7 +454,7 @@ const userSecondaryLabel =
           text
           class="w-full justify-start"
           @click="
-            emit(
+            emitAndClose(
               'open-codes'
             )
           "
@@ -250,19 +466,19 @@ const userSecondaryLabel =
           text
           class="w-full justify-start"
           @click="
-            emit(
+            emitAndClose(
               'open-users'
             )
           "
         />
-    
+
         <Button
           label="Menu associations"
           icon="pi pi-link"
           text
           class="w-full justify-start"
           @click="
-            emit(
+            emitAndClose(
               'open-menu-associations'
             )
           "
@@ -289,7 +505,7 @@ const userSecondaryLabel =
                 userSecondaryLabel()
               }}
             </small>
-            
+
             <span
               v-if="currentUser?.role"
               class="user-role"
@@ -330,7 +546,7 @@ const userSecondaryLabel =
           text
           size="small"
           @click="
-            emit(
+            emitAndClose(
               loggedIn
                 ? 'logout'
                 : 'login'
@@ -341,3 +557,110 @@ const userSecondaryLabel =
     </div>
   </aside>
 </template>
+
+<style scoped>
+/*
+ * Wide screens keep the sidebar exactly as it was:
+ * the drawer controls are hidden and .menu-sidebar
+ * is left entirely to your global stylesheet.
+ */
+.sidebar-toggle,
+.sidebar-close,
+.sidebar-backdrop {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .sidebar-toggle {
+    display: inline-flex;
+    position: fixed;
+    top: 0.75rem;
+    left: 0.75rem;
+    z-index: 41;
+    transition:
+      opacity 0.16s ease,
+      visibility 0.16s ease;
+  }
+
+  /*
+   * Out of sight and out of the tab order once the
+   * drawer takes over; the close button replaces it.
+   */
+  .sidebar-toggle.is-hidden {
+    opacity: 0;
+    visibility: hidden;
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 39;
+    background: rgba(0, 0, 0, 0.45);
+    opacity: 0;
+    visibility: hidden;
+    transition:
+      opacity 0.24s ease,
+      visibility 0.24s ease;
+  }
+
+  .sidebar-backdrop.is-visible {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  .menu-sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 40;
+    width: min(86vw, 20rem);
+    max-width: 100%;
+    overflow-y: auto;
+    box-shadow: 0 0 2rem rgba(0, 0, 0, 0.25);
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition:
+      transform 0.24s ease,
+      visibility 0.24s ease;
+  }
+
+  .menu-sidebar.is-open {
+    transform: none;
+    visibility: visible;
+  }
+
+  .sidebar-close {
+    display: inline-flex;
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    z-index: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menu-sidebar,
+  .sidebar-backdrop,
+  .sidebar-toggle {
+    transition: none;
+  }
+}
+</style>
+
+<!--
+  Unscoped on purpose: the fixed hamburger is taken out
+  of the flow, so the main column has to reserve room for
+  it or the button lands on top of the menu title.
+
+  Move this into menu-dashboard.css if you'd rather keep
+  layout rules in one place.
+-->
+<style>
+@media (max-width: 900px) {
+  .menu-dashboard-shell .menu-dashboard-main {
+    padding-top: 3.5rem;
+  }
+}
+</style>

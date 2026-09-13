@@ -5,6 +5,7 @@ import {
   ref,
 } from 'vue'
 
+import Button from 'primevue/button'
 import Message from 'primevue/message'
 import ProgressSpinner from 'primevue/progressspinner'
 
@@ -26,6 +27,9 @@ import SaveBar
 
 import MenuHeader
   from '@/components/menu/MenuHeader.vue'
+
+import CollapsibleCard
+  from '@/components/menu/CollapsibleCard.vue'
 
 import MenuOwnerForm
   from '@/components/menu/MenuOwnerForm.vue'
@@ -128,6 +132,99 @@ const items =
 const isAdmin = computed(
   () => dashboard.currentUser.value?.role === 'admin'
 )
+
+/*
+|--------------------------------------------------------------------------
+| Section summaries
+|--------------------------------------------------------------------------
+|
+| Shown next to the section title so a collapsed card
+| still tells you what's inside it.
+|
+*/
+
+const ownerSummary =
+  computed(
+    () =>
+      owner.value
+        ?.menu_owner_name ||
+      ''
+  )
+
+const categoryCount =
+  computed(
+    () =>
+      Array.isArray(
+        config.value
+          ?.category_order
+      )
+        ? config
+          .value
+          .category_order
+          .length
+        : 0
+  )
+
+const categorySummary =
+  computed(
+    () =>
+      `${categoryCount.value} categor${
+        categoryCount.value === 1
+          ? 'y'
+          : 'ies'
+      }`
+  )
+
+const itemsSummary =
+  computed(
+    () =>
+      `${items.value.length} item${
+        items.value.length === 1
+          ? ''
+          : 's'
+      }`
+  )
+
+/*
+|--------------------------------------------------------------------------
+| Expand / collapse all
+|--------------------------------------------------------------------------
+*/
+
+const sectionKeys = [
+  'menu-owner',
+  'appearance',
+  'category-order',
+  'menu-items',
+]
+
+/*
+ * Bumping this remounts the four cards, which makes
+ * them re-read their stored state.
+ */
+const sectionsVersion =
+  ref(0)
+
+function setAllSections(
+  open
+) {
+  for (
+    const key
+    of sectionKeys
+  ) {
+    try {
+      window.localStorage
+        .setItem(
+          `menu-dashboard:section:${key}`,
+          open ? '1' : '0'
+        )
+    } catch {
+      // Storage disabled, nothing to persist.
+    }
+  }
+
+  sectionsVersion.value += 1
+}
 
 /*
 |--------------------------------------------------------------------------
@@ -514,65 +611,125 @@ onMounted(
             "
           />
 
+          <!-- Section controls -->
+          <div class="section-controls">
+            <Button
+              label="Expand all"
+              icon="pi pi-angle-double-down"
+              severity="secondary"
+              text
+              size="small"
+              @click="
+                setAllSections(true)
+              "
+            />
+
+            <Button
+              label="Collapse all"
+              icon="pi pi-angle-double-up"
+              severity="secondary"
+              text
+              size="small"
+              @click="
+                setAllSections(false)
+              "
+            />
+          </div>
+
           <!-- Owner -->
-          <MenuOwnerForm
+          <CollapsibleCard
             v-if="owner"
-            :owner="owner"
-            :is-admin="isAdmin"
-          />
+            :key="`owner-${sectionsVersion}`"
+            title="Menu owner"
+            :subtitle="ownerSummary"
+            storage-key="menu-owner"
+            :default-open="false"
+            flush
+          >
+            <MenuOwnerForm
+              :owner="owner"
+              :is-admin="isAdmin"
+            />
+          </CollapsibleCard>
 
           <!-- Configuration -->
-          <MenuConfigurationForm
+          <CollapsibleCard
             v-if="config"
-            :config="config"
-            :owner-name="
-              owner
-                ?.menu_owner_name ||
-              ''
-            "
-            :is-admin="isAdmin"
-          />
+            :key="`appearance-${sectionsVersion}`"
+            title="Appearance"
+            storage-key="appearance"
+            :default-open="false"
+            flush
+          >
+            <MenuConfigurationForm
+              :config="config"
+              :owner-name="
+                owner
+                  ?.menu_owner_name ||
+                ''
+              "
+              :is-admin="isAdmin"
+            />
+          </CollapsibleCard>
 
           <!-- Category order -->
-          <CategoryTreeEditor
+          <CollapsibleCard
             v-if="config"
-            v-model="
-              config.category_order
-            "
-          />
+            :key="`categories-${sectionsVersion}`"
+            title="Category order"
+            :subtitle="categorySummary"
+            storage-key="category-order"
+            :default-open="false"
+            flush
+          >
+            <CategoryTreeEditor
+              v-model="
+                config.category_order
+              "
+            />
+          </CollapsibleCard>
 
           <!-- Items -->
-          <MenuItemsSection
-            :items="items"
-            :menu-id="
-              dashboard
-                .draftMenu
-                .value
-                .id
-            "
-            :menu-name="
-              dashboard
-                .draftMenu
-                .value
-                ?.menu_owner
-                ?.menu_owner_name ||
-              ''
-            "
-            :menu-slug="
-              dashboard
-                .draftMenu
-                .value
-                ?.menu_owner
-                ?.menu_owner_url_name ||
-              ''
-            "
-            :token="
-              dashboard
-                .authToken
-                .value
-            "
-            :is-admin="isAdmin"
-          />
+          <CollapsibleCard
+            :key="`items-${sectionsVersion}`"
+            title="Menu items"
+            :subtitle="itemsSummary"
+            storage-key="menu-items"
+            :default-open="false"
+            flush
+          >
+            <MenuItemsSection
+              :items="items"
+              :menu-id="
+                dashboard
+                  .draftMenu
+                  .value
+                  .id
+              "
+              :menu-name="
+                dashboard
+                  .draftMenu
+                  .value
+                  ?.menu_owner
+                  ?.menu_owner_name ||
+                ''
+              "
+              :menu-slug="
+                dashboard
+                  .draftMenu
+                  .value
+                  ?.menu_owner
+                  ?.menu_owner_url_name ||
+                ''
+              "
+              :token="
+                dashboard
+                  .authToken
+                  .value
+              "
+              :is-admin="isAdmin"
+            />
+          </CollapsibleCard>
         </template>
 
         <!-- No menu selected -->
@@ -707,9 +864,15 @@ onMounted(
           .menus
           .value
       "
-      :users="
-        users
-      "
     />
   </div>
 </template>
+
+<style scoped>
+.section-controls {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+</style>
