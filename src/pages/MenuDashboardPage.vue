@@ -168,7 +168,7 @@ const categoryCount =
 const categorySummary =
   computed(
     () =>
-      `${categoryCount.value} categor${
+      `${categoryCount.value} main categor${
         categoryCount.value === 1
           ? 'y'
           : 'ies'
