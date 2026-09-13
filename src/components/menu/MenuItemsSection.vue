@@ -717,8 +717,9 @@ function exportCsv() {
       :key="group.category"
       class="menu-item-category"
     >
-      <button
-        type="button"
+      <div
+        role="button"
+        tabindex="0"
         class="menu-item-category-heading"
         :aria-expanded="
           isCategoryOpen(
@@ -726,6 +727,16 @@ function exportCsv() {
           )
         "
         @click="
+          toggleCategory(
+            group.category
+          )
+        "
+        @keydown.enter.prevent="
+          toggleCategory(
+            group.category
+          )
+        "
+        @keydown.space.prevent="
           toggleCategory(
             group.category
           )
@@ -749,7 +760,7 @@ function exportCsv() {
         <span>
           {{ group.items.length }}
         </span>
-      </button>
+      </div>
 
       <div
         v-show="
@@ -860,20 +871,17 @@ function exportCsv() {
 }
 
 /*
- * The category heading used to be a div, so the
- * button defaults need stripping back out.
+ * Only what the toggle actually needs. No font, colour
+ * or border resets here - those would override whatever
+ * menu-dashboard.css sets for this class, which is what
+ * made the heading look out of place.
  */
 .menu-item-category-heading {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  width: 100%;
-  background: none;
-  border: 0;
-  color: inherit;
-  font: inherit;
-  text-align: left;
   cursor: pointer;
+  user-select: none;
 }
 
 .menu-item-category-heading:focus-visible {

@@ -212,31 +212,44 @@ const nodePath = (path, index) => [
 }
 
 @media (max-width: 640px) {
+  /*
+   * Each category becomes its own bubble, so it's
+   * obvious which buttons belong to which field.
+   * Border only - no fill - so nothing clashes with
+   * the card underneath.
+   */
   .category-node-row {
-    gap: 0.15rem;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.4rem;
+    padding: 0.6rem;
+    border: 1px solid
+      var(--p-content-border-color, rgba(0, 0, 0, 0.12));
+    border-radius: 0.6rem;
   }
 
+  .category-tree-node {
+    margin-bottom: 0.5rem;
+  }
+
+  .category-node-input {
+    width: 100%;
+  }
+
+  /*
+   * Buttons get their own line, so they can go back to
+   * a comfortable size instead of being squeezed in
+   * beside the field.
+   */
   .category-node-actions {
-    gap: 0;
-  }
-
-  .category-node-input :deep(input),
-  .category-node-input.p-inputtext {
-    /*
-     * Narrow enough that the five buttons still fit.
-     */
-    padding-inline: 0.4rem;
-    font-size: 0.85rem;
+    justify-content: center;
+    gap: 0.1rem;
   }
 
   .category-node-actions :deep(.p-button) {
-    width: 1.9rem;
-    height: 1.9rem;
+    width: 2.25rem;
+    height: 2.25rem;
     padding: 0;
-  }
-
-  .category-node-actions :deep(.p-button .p-button-icon) {
-    font-size: 0.8rem;
   }
 
   /*

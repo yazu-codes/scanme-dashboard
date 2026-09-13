@@ -337,6 +337,13 @@ const currentMenuLabel =
       <span class="sidebar-topbar-title">
         {{ currentMenuLabel }}
       </span>
+
+      <span
+        v-if="isAdmin && currentMenu"
+        class="sidebar-topbar-id"
+      >
+        #{{ currentMenu.id }}
+      </span>
     </button>
 
     <div
@@ -676,6 +683,16 @@ const currentMenuLabel =
     text-overflow: ellipsis;
     white-space: nowrap;
     font-weight: 600;
+  }
+
+  /*
+   * Never shrinks, so the id stays readable while a
+   * long name truncates beside it.
+   */
+  .sidebar-topbar-id {
+    flex: 0 0 auto;
+    font-size: 0.85rem;
+    opacity: 0.65;
   }
 
   /*
