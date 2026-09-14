@@ -663,24 +663,28 @@ onMounted(
           "
         >
           <!-- Unsaved changes -->
-          <SaveBar
+          <div
             v-if="
               dashboard
                 .dirty
                 .value
             "
-            :saving="
-              dashboard
-                .saving
-                .value
-            "
-            @save="
-              dashboard.saveMenu
-            "
-            @discard="
-              dashboard.discardDraft
-            "
-          />
+            class="save-bar-dock"
+          >
+            <SaveBar
+              :saving="
+                dashboard
+                  .saving
+                  .value
+              "
+              @save="
+                dashboard.saveMenu
+              "
+              @discard="
+                dashboard.discardDraft
+              "
+            />
+          </div>
 
           <!-- Menu heading -->
           <MenuHeader
@@ -996,6 +1000,17 @@ onMounted(
 @media (max-width: 900px) {
   .section-controls {
     display: none;
+  }
+
+  /*
+   * The sticky nav is fixed at z-index 41 and 3rem tall,
+   * so the save bar docks just below it and outranks it.
+   * Keep both numbers in step with MenuSidebar.
+   */
+  .save-bar-dock {
+    position: sticky;
+    top: 3rem;
+    z-index: 42;
   }
 }
 </style>
