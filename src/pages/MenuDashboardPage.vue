@@ -829,6 +829,7 @@ onMounted(
 
           <!-- Review links -->
           <CollapsibleCard
+            v-if="isAdmin"
             :key="`review-links-${sectionsVersion}`"
             title="Review links"
             :subtitle="reviewLinksSummary"
