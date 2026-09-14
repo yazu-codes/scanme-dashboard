@@ -1003,14 +1003,22 @@ onMounted(
   }
 
   /*
-   * The sticky nav is fixed at z-index 41 and 3rem tall,
-   * so the save bar docks just below it and outranks it.
-   * Keep both numbers in step with MenuSidebar.
+   * Fixed rather than sticky, so appearing and
+   * disappearing doesn't shift everything below it.
+   * Not absolute: with no positioned ancestor it would
+   * scroll away with the page instead of staying put.
+   *
+   * The sticky nav is 3rem tall at z-index 41, so this
+   * docks below it and outranks it. Keep both numbers in
+   * step with MenuSidebar.
    */
   .save-bar-dock {
-    position: sticky;
+    position: fixed;
     top: 3rem;
+    left: 0;
+    right: 0;
     z-index: 42;
+    padding: 0 0.85rem;
   }
 }
 </style>
