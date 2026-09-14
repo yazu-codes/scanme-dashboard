@@ -210,6 +210,18 @@ export function createMenuApi({
     listCodes: () =>
       request('/codes'),
 
+    /*
+     * The backend generates the code itself, so there's
+     * no payload to send.
+     */
+    createCode: () =>
+      request(
+        '/create-code',
+        {
+          method: 'POST',
+        }
+      ),
+
     updateCode: payload =>
       request(
         '/update-code',

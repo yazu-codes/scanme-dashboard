@@ -3,6 +3,7 @@ import {
   computed,
   onMounted,
   ref,
+  watch,
 } from 'vue'
 
 import Button from 'primevue/button'
@@ -42,6 +43,9 @@ import CategoryTreeEditor
 
 import MenuItemsSection
   from '@/components/menu/MenuItemsSection.vue'
+
+import MenuReviewLinksSection
+  from '@/components/menu/MenuReviewLinksSection.vue'
 
 import NewMenuDialog
   from '@/components/menu/NewMenuDialog.vue'
@@ -135,6 +139,58 @@ const isAdmin = computed(
 
 /*
 |--------------------------------------------------------------------------
+| Review links
+|--------------------------------------------------------------------------
+|
+| They live on menu_owner. The backend may omit the key
+| when a menu has none, and the section pushes straight
+| into this array, so it has to exist ON the owner - a
+| `|| []` fallback alone would hand out a detached array
+| and silently drop new rows.
+|
+*/
+
+watch(
+  () => dashboard.draftMenu.value,
+  draft => {
+    const ownerDraft =
+      draft?.menu_owner
+
+    if (
+      ownerDraft &&
+      !Array.isArray(
+        ownerDraft.review_links
+      )
+    ) {
+      ownerDraft.review_links = []
+    }
+  },
+  {
+    immediate: true,
+  }
+)
+
+const reviewLinks =
+  computed(
+    () =>
+      owner
+        .value
+        ?.review_links ||
+      []
+  )
+
+const reviewLinksSummary =
+  computed(
+    () =>
+      `${reviewLinks.value.length} link${
+        reviewLinks.value.length === 1
+          ? ''
+          : 's'
+      }`
+  )
+
+/*
+|--------------------------------------------------------------------------
 | Section summaries
 |--------------------------------------------------------------------------
 |
@@ -168,7 +224,7 @@ const categoryCount =
 const categorySummary =
   computed(
     () =>
-      `${categoryCount.value} main categor${
+      `${categoryCount.value} categor${
         categoryCount.value === 1
           ? 'y'
           : 'ies'
@@ -196,6 +252,7 @@ const sectionKeys = [
   'appearance',
   'category-order',
   'menu-items',
+  'review-links',
 ]
 
 /*
@@ -763,6 +820,27 @@ onMounted(
                   .value
               "
               :is-admin="isAdmin"
+            />
+          </CollapsibleCard>
+
+          <!-- Review links -->
+          <CollapsibleCard
+            v-if="isAdmin"
+            :key="`review-links-${sectionsVersion}`"
+            title="Review links"
+            :subtitle="reviewLinksSummary"
+            storage-key="review-links"
+            :default-open="false"
+            flush
+          >
+            <MenuReviewLinksSection
+              :links="reviewLinks"
+              :menu-id="
+                dashboard
+                  .draftMenu
+                  .value
+                  .id
+              "
             />
           </CollapsibleCard>
         </template>
