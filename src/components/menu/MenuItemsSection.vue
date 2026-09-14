@@ -359,17 +359,14 @@ function deleteItem(
     return
   }
 
+  /*
+   * Object identity, not _key: rows loaded from the
+   * backend have no _key, so comparing keys matched
+   * `undefined === undefined` and removed the first
+   * saved item instead of this one.
+   */
   const index =
-    props.items.findIndex(
-      candidate =>
-        candidate._key ===
-          item._key ||
-        (
-          item.id &&
-          candidate.id ===
-            item.id
-        )
-    )
+    props.items.indexOf(item)
 
   if (index !== -1) {
     props.items.splice(

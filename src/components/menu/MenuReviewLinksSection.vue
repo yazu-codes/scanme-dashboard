@@ -83,17 +83,14 @@ function removeLink(
     return
   }
 
+  /*
+   * Object identity, not _key: rows loaded from the
+   * backend have no _key, so comparing keys matched
+   * `undefined === undefined` and removed the first
+   * saved row instead of this one.
+   */
   const index =
-    props.links.findIndex(
-      candidate =>
-        candidate._key ===
-          link._key ||
-        (
-          link.id &&
-          candidate.id ===
-            link.id
-        )
-    )
+    props.links.indexOf(link)
 
   if (index !== -1) {
     props.links.splice(
