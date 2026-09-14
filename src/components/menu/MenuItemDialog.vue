@@ -52,20 +52,48 @@ const form = reactive({
 
 const categorySuggestions = ref([])
 
+/*
+ * Accepts plain strings or { name, path } entries, so
+ * the dialog still works if a caller passes a bare list.
+ */
 const knownCategories = computed(() =>
   props.categories
-    .map((category) => String(category))
-    .filter(Boolean)
+    .map((entry) =>
+      typeof entry === 'string'
+        ? { name: entry, path: '' }
+        : {
+            name: String(entry?.name ?? entry?.label ?? ''),
+            path: String(entry?.path ?? ''),
+          }
+    )
+    .filter((entry) => entry.name)
+)
+
+const categoryNames = computed(() =>
+  knownCategories.value.map((entry) => entry.name)
+)
+
+/*
+ * Suggestions stay plain strings so the field's value is
+ * a string - selecting an object would put one straight
+ * into form.category. The path is looked up for display
+ * only.
+ */
+const categoryPaths = computed(
+  () =>
+    new Map(
+      knownCategories.value.map((entry) => [entry.name, entry.path])
+    )
 )
 
 function searchCategories(event) {
   const query = (event.query || '').trim().toLowerCase()
 
   categorySuggestions.value = query
-    ? knownCategories.value.filter((category) =>
-        category.toLowerCase().includes(query)
+    ? categoryNames.value.filter((name) =>
+        name.toLowerCase().includes(query)
       )
-    : [...knownCategories.value]
+    : [...categoryNames.value]
 }
 
 watch(
@@ -87,7 +115,7 @@ watch(
     })
 
     selectedFile.value = null
-    categorySuggestions.value = [...knownCategories.value]
+    categorySuggestions.value = [...categoryNames.value]
   },
   { immediate: true }
 )
@@ -179,7 +207,20 @@ async function submit() {
           completeOnFocus
           placeholder="Choose one or type a new name"
           @complete="searchCategories"
-        />
+        >
+          <template #option="slotProps">
+            <div class="category-option">
+              <span>{{ slotProps.option }}</span>
+
+              <small
+                v-if="categoryPaths.get(slotProps.option)"
+                class="category-option-path"
+              >
+                {{ categoryPaths.get(slotProps.option) }}
+              </small>
+            </div>
+          </template>
+        </AutoComplete>
       </label>
 
       <label class="field">
@@ -239,5 +280,17 @@ async function submit() {
 
 .category-field :deep(.p-autocomplete-input) {
   width: 100%;
+}
+
+.category-option {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.category-option-path {
+  font-size: 0.75rem;
+  opacity: 0.65;
 }
 </style>

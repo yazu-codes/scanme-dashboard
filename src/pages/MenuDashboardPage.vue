@@ -823,6 +823,11 @@ onMounted(
                   .authToken
                   .value
               "
+              :category-order="
+                config
+                  ?.category_order ||
+                []
+              "
               :is-admin="isAdmin"
             />
           </CollapsibleCard>

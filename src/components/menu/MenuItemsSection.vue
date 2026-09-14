@@ -46,6 +46,15 @@ const props = defineProps({
     default: null,
   },
 
+  /*
+   * The configured category tree, used to show each
+   * suggestion's parent path in the item dialog.
+   */
+  categoryOrder: {
+    type: Array,
+    default: () => [],
+  },
+
   isAdmin: {
     type: Boolean,
     default: false,
@@ -232,24 +241,141 @@ const anyCategoryOpen =
   )
 
 /*
- * Categories already in use, for the dialog's picker.
- * Sorted so the list doesn't reorder itself as items
- * move around.
+ * Categories for the dialog's picker, each with the
+ * parent path it sits under, so two categories with
+ * similar names can be told apart.
+ *
+ * Tree nodes are either a plain string (a leaf) or an
+ * object with `label` and optional `children`.
  */
-const categoryOptions =
-  computed(() =>
-    Array.from(
-      new Set(
-        props.items.map(
-          item =>
-            categoryOf(item)
+function flattenCategoryTree(
+  nodes,
+  trail = []
+) {
+  const out = []
+
+  for (
+    const node
+    of nodes || []
+  ) {
+    const label =
+      typeof node === 'string'
+        ? node
+        : node?.label
+
+    if (!label) {
+      continue
+    }
+
+    const name =
+      String(label).trim()
+
+    if (!name) {
+      continue
+    }
+
+    out.push({
+      name,
+
+      path:
+        trail.join(' › '),
+    })
+
+    if (
+      typeof node !== 'string' &&
+      node.children?.length
+    ) {
+      out.push(
+        ...flattenCategoryTree(
+          node.children,
+          [
+            ...trail,
+            name,
+          ]
         )
       )
-    ).sort(
+    }
+  }
+
+  return out
+}
+
+const categoryOptions =
+  computed(() => {
+    const seen =
+      new Map()
+
+    /*
+     * Tree order first - it's the order the menu is
+     * actually displayed in.
+     */
+    for (
+      const entry
+      of flattenCategoryTree(
+        props.categoryOrder
+      )
+    ) {
+      if (
+        !seen.has(entry.name)
+      ) {
+        seen.set(
+          entry.name,
+          entry
+        )
+      }
+    }
+
+    /*
+     * Then anything in use that the tree doesn't know
+     * about, so those categories stay reachable.
+     */
+    const extras = []
+
+    for (
+      const item
+      of props.items
+    ) {
+      const name =
+        categoryOf(item)
+
+      if (
+        seen.has(name)
+      ) {
+        continue
+      }
+
+      seen.set(
+        name,
+        {
+          name,
+          path: '',
+        }
+      )
+
+      extras.push(name)
+    }
+
+    extras.sort(
       (a, b) =>
         a.localeCompare(b)
     )
-  )
+
+    return [
+      ...Array.from(
+        seen.values()
+      ).filter(
+        entry =>
+          !extras.includes(
+            entry.name
+          )
+      ),
+
+      ...extras.map(
+        name =>
+          seen.get(name)
+      ),
+    ]
+  })
 
 function toggleAllCategories() {
   if (
