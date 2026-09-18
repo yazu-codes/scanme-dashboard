@@ -115,6 +115,43 @@ const SORTS = [
 ]
 
 /*
+ * Matched by prefix rather than exact name, so related
+ * events added later - code_scan_review,
+ * code_scan_failed, a future qr_scan_download - fall
+ * into the right bucket without this list being
+ * updated.
+ */
+const QUICK_FILTERS = [
+  {
+    value: 'all',
+    label: 'All',
+    icon: 'pi pi-list',
+    match: null,
+  },
+  {
+    value: 'views',
+    label: 'Views',
+    icon: 'pi pi-eye',
+    match: name =>
+      name.startsWith('view'),
+  },
+  {
+    value: 'qr',
+    label: 'QR scans',
+    icon: 'pi pi-qrcode',
+    match: name =>
+      name.startsWith('qr'),
+  },
+  {
+    value: 'code',
+    label: 'Code scans',
+    icon: 'pi pi-link',
+    match: name =>
+      name.startsWith('code'),
+  },
+]
+
+/*
 |--------------------------------------------------------------------------
 | Remote state
 |--------------------------------------------------------------------------
@@ -149,6 +186,9 @@ const lastLoadedAt =
 
 const search =
   ref('')
+
+const quickFilter =
+  ref('all')
 
 const hiddenNames =
   ref(
@@ -480,6 +520,7 @@ watch(
     search,
     sortBy,
     hiddenNames,
+    quickFilter,
     events,
   ],
   () => {
@@ -505,6 +546,35 @@ const scopedEvents =
   )
 
 /*
+ * The quick filter narrows the pool first, so the chips
+ * and their counts describe the bucket you're in rather
+ * than everything that was loaded.
+ */
+const quickFiltered =
+  computed(() => {
+    const preset =
+      QUICK_FILTERS.find(
+        entry =>
+          entry.value ===
+          quickFilter.value
+      )
+
+    if (
+      !preset ||
+      !preset.match
+    ) {
+      return scopedEvents.value
+    }
+
+    return scopedEvents
+      .value
+      .filter(
+        event =>
+          preset.match(event.name)
+      )
+  })
+
+/*
  * One chip per event name, so `view`, `qr_scan`,
  * `code_scan` and anything added later each get a count
  * without this component knowing their names.
@@ -516,7 +586,7 @@ const nameSummary =
 
     for (
       const event
-      of scopedEvents.value
+      of quickFiltered.value
     ) {
       counts.set(
         event.name,
@@ -547,7 +617,7 @@ const filteredEvents =
         .trim()
         .toLowerCase()
 
-    return scopedEvents
+    return quickFiltered
       .value
       .filter(event => {
         if (
@@ -645,7 +715,8 @@ const uniqueItemCount =
 const activeFilterCount =
   computed(() =>
     hiddenNames.value.size +
-    (search.value.trim() ? 1 : 0)
+    (search.value.trim() ? 1 : 0) +
+    (quickFilter.value !== 'all' ? 1 : 0)
   )
 
 function showMore() {
@@ -882,6 +953,8 @@ function toggleName(
 function clearFilters() {
   hiddenNames.value =
     new Set()
+
+  quickFilter.value = 'all'
 
   search.value = ''
 }
@@ -1172,6 +1245,40 @@ function exportCsv() {
           :disabled="loading"
           @click="days = preset.value"
         >
+          {{ preset.label }}
+        </button>
+      </div>
+      <!--
+        Always visible, unlike the chips in the drawer:
+        these are the three questions actually asked of
+        this panel.
+      -->
+      <div
+        class="segmented"
+        role="group"
+        aria-label="Event type"
+      >
+        <button
+          v-for="preset in QUICK_FILTERS"
+          :key="preset.value"
+          type="button"
+          class="segmented-option"
+          :class="{
+            'is-selected':
+              quickFilter === preset.value,
+          }"
+          :aria-pressed="
+            quickFilter === preset.value
+          "
+          @click="
+            quickFilter = preset.value
+          "
+        >
+          <i
+            :class="preset.icon"
+            aria-hidden="true"
+          />
+
           {{ preset.label }}
         </button>
       </div>
