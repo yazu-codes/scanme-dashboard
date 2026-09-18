@@ -8,6 +8,9 @@ import {
 } from 'vue'
 
 import Button from 'primevue/button'
+import Dialog from 'primevue/dialog'
+
+import AnalyticsEvents from './AnalyticsEvents.vue'
 
 const props = defineProps({
   isAdmin: {
@@ -40,6 +43,23 @@ const props = defineProps({
   apiBase: {
     type: String,
     default: '',
+  },
+
+  /*
+   * Bearer token for the analytics service. Kept apart
+   * from apiBase because the analytics server is its
+   * own deployment.
+   */
+  token: {
+    type: String,
+    default: null,
+  },
+
+  analyticsBase: {
+    type: String,
+    default:
+      import.meta.env.VITE_ANALYTICS_BASE ||
+      'https://scanme-analytics-production.up.railway.app',
   },
 
   /*
@@ -223,6 +243,33 @@ onBeforeUnmount(() => {
       'sidebar-drawer-open'
     )
 })
+
+/*
+|--------------------------------------------------------------------------
+| Analytics dialog
+|--------------------------------------------------------------------------
+|
+| Hosted here rather than emitted to the parent, so the
+| sidebar owns both the button and the modal.
+|
+| The drawer is closed first: otherwise it sits behind
+| the dialog on narrow screens with the page scroll
+| still locked.
+|
+| PrimeVue teleports the dialog to <body>, so the
+| drawer's z-index and overflow-y don't clip it.
+|
+*/
+
+const showAnalytics =
+  ref(false)
+
+function openAnalytics() {
+  closeDrawer()
+
+  showAnalytics.value =
+    true
+}
 
 /*
 |--------------------------------------------------------------------------
@@ -496,6 +543,14 @@ const currentMenuLabel =
       <!-- Management -->
       <template v-if="loggedIn && isAdmin">
         <Button
+          label="Analytics"
+          icon="pi pi-chart-bar"
+          text
+          class="w-full justify-start"
+          @click="openAnalytics"
+        />
+
+        <Button
           label="Manage images"
           icon="pi pi-images"
           text
@@ -615,6 +670,31 @@ const currentMenuLabel =
       </div>
     </div>
   </aside>
+
+  <!--
+    Outside <aside> so it isn't inside the drawer's
+    stacking context. The body only mounts while
+    visible, so no request is made until it's opened -
+    and it reloads on each open rather than going stale.
+  -->
+  <Dialog
+    v-model:visible="showAnalytics"
+    modal
+    dismissable-mask
+    header="Analytics"
+    class="analytics-dialog"
+    :style="{
+      width: 'min(76rem, 95vw)',
+    }"
+    :breakpoints="{
+      '900px': '95vw',
+    }"
+  >
+    <AnalyticsEvents
+      :api-base="analyticsBase"
+      :token="token"
+    />
+  </Dialog>
 </template>
 
 <style scoped>
@@ -627,6 +707,21 @@ const currentMenuLabel =
 .sidebar-close,
 .sidebar-backdrop {
   display: none;
+}
+
+/*
+ * AnalyticsEvents renders its own dashboard-card, which
+ * would otherwise sit as a boxed panel inside the
+ * dialog's own padded body. Flatten it.
+ *
+ * :deep because the dialog is teleported and the card
+ * belongs to a child component.
+ */
+.analytics-dialog :deep(.dashboard-card) {
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
 }
 
 @media (max-width: 900px) {
