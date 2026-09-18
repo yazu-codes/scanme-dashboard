@@ -681,14 +681,9 @@ const currentMenuLabel =
     v-model:visible="showAnalytics"
     modal
     dismissable-mask
+    append-to="body"
     header="Analytics"
     class="analytics-dialog"
-    :style="{
-      width: 'min(76rem, 95vw)',
-    }"
-    :breakpoints="{
-      '900px': '95vw',
-    }"
   >
     <AnalyticsEvents
       :api-base="analyticsBase"
@@ -707,21 +702,6 @@ const currentMenuLabel =
 .sidebar-close,
 .sidebar-backdrop {
   display: none;
-}
-
-/*
- * AnalyticsEvents renders its own dashboard-card, which
- * would otherwise sit as a boxed panel inside the
- * dialog's own padded body. Flatten it.
- *
- * :deep because the dialog is teleported and the card
- * belongs to a child component.
- */
-.analytics-dialog :deep(.dashboard-card) {
-  padding: 0;
-  border: 0;
-  box-shadow: none;
-  background: transparent;
 }
 
 @media (max-width: 900px) {
@@ -869,6 +849,58 @@ const currentMenuLabel =
 @media (max-width: 900px) {
   .menu-dashboard-shell .menu-dashboard-main {
     padding-top: 3.5rem;
+  }
+}
+
+/*
+|--------------------------------------------------------------------------
+| Analytics dialog
+|--------------------------------------------------------------------------
+|
+| Unscoped because PrimeVue teleports the dialog to
+| <body>, which puts it outside this component's scope
+| attribute - a scoped rule, :deep() included, can never
+| reach it.
+|
+*/
+
+.analytics-dialog {
+  width: min(76rem, 95vw);
+  max-width: 100vw;
+}
+
+/*
+ * Without this the widest child - a long path, the stat
+ * strip - sets the dialog's width and pushes it past the
+ * viewport.
+ */
+.analytics-dialog .p-dialog-content {
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+/*
+ * Below this width a centred card wastes most of the
+ * screen, so the dialog becomes a full-screen sheet.
+ * 100dvh rather than 100vh so the mobile browser's
+ * address bar doesn't cut the bottom off.
+ */
+@media (max-width: 720px) {
+  .analytics-dialog.p-dialog {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    margin: 0;
+    border-radius: 0;
+  }
+
+  .analytics-dialog .p-dialog-header {
+    padding: 0.75rem 0.9rem;
+  }
+
+  .analytics-dialog .p-dialog-content {
+    padding: 0.75rem 0.9rem 1.5rem;
   }
 }
 </style>

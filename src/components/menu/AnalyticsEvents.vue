@@ -1639,6 +1639,18 @@ function exportCsv() {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  /*
+   * The strips inside scroll sideways on their own. This
+   * stops any of them from widening the panel itself,
+   * which is what pushed the dialog off screen.
+   */
+  overflow-x: hidden;
+}
+
+.events-app > * {
   min-width: 0;
   max-width: 100%;
 }
@@ -2085,12 +2097,16 @@ function exportCsv() {
   align-items: flex-end;
   justify-self: end;
   min-width: 0;
+  /*
+   * The full date is the widest thing in the row. Let it
+   * wrap here rather than set the row's minimum width.
+   */
+  text-align: right;
 }
 
 .event-time {
   font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
   opacity: 0.8;
 }
 
@@ -2260,6 +2276,10 @@ function exportCsv() {
     flex-direction: row;
     align-items: baseline;
     gap: 0.45rem;
+  }
+
+  .event-time {
+    white-space: nowrap;
   }
 
   .event-item {
