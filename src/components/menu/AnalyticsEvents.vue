@@ -120,6 +120,10 @@ const SORTS = [
  * code_scan_failed, a future qr_scan_download - fall
  * into the right bucket without this list being
  * updated.
+ *
+ * Page views are matched with a leading anchor because
+ * `item_view` is a different thing entirely and must
+ * not be counted among them.
  */
 const QUICK_FILTERS = [
   {
@@ -130,10 +134,18 @@ const QUICK_FILTERS = [
   },
   {
     value: 'views',
-    label: 'Views',
+    label: 'Page views',
     icon: 'pi pi-eye',
     match: name =>
-      name.startsWith('view'),
+      name === 'view' ||
+      name.startsWith('view_'),
+  },
+  {
+    value: 'items',
+    label: 'Item clicks',
+    icon: 'pi pi-shopping-bag',
+    match: name =>
+      name.startsWith('item_'),
   },
   {
     value: 'qr',
