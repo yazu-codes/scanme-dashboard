@@ -94,6 +94,8 @@ export function createEmptyMenu(name, urlName) {
       menu_owner_logo_url: '',
       menu_owner_slogan: '',
       menu_owner_slogan_en: '',
+      menu_owner_wifi: '',
+      menu_owner_working_schedule: '',
       menu_owner_place_background_url: '',
     },
     menu_configuration: {

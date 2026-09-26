@@ -53,6 +53,16 @@ defineProps({
         <span>English slogan</span>
         <Textarea v-model="owner.menu_owner_slogan_en" rows="2" />
       </label>
+
+      <label class="field field-full">
+        <span>WIFI Details</span>
+        <Textarea v-model="owner.menu_owner_wifi" rows="2" />
+      </label>
+
+      <label class="field field-full">
+        <span>Working Schedule</span>
+        <Textarea v-model="owner.menu_owner_working_schedule" rows="2" />
+      </label>
     </div>
   </section>
 </template>
