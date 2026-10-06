@@ -1,6 +1,7 @@
 <script setup>
 import {
   computed,
+  nextTick,
   onMounted,
   ref,
   watch,
@@ -68,6 +69,20 @@ const MAX_DAYS = 180
 
 const PAGE_SIZE = 50
 
+/*
+ * Two events from the same visitor further apart than
+ * this are treated as separate visits. Thirty minutes
+ * is the common analytics convention.
+ */
+const SESSION_GAP_MS =
+  30 * 60 * 1000
+
+/*
+ * How many steps of a visitor's path to preview on the
+ * visitor card before collapsing the rest into "+N".
+ */
+const PATH_PREVIEW_STEPS = 4
+
 const DAY_PRESETS = [
   {
     value: 1,
@@ -91,6 +106,19 @@ const DAY_PRESETS = [
   },
 ]
 
+const VIEW_MODES = [
+  {
+    value: 'events',
+    label: 'Events',
+    icon: 'pi pi-list',
+  },
+  {
+    value: 'visitors',
+    label: 'Visitors',
+    icon: 'pi pi-users',
+  },
+]
+
 const SORTS = [
   {
     value: 'newest',
@@ -111,6 +139,24 @@ const SORTS = [
     value: 'item',
     label: 'Item',
     icon: 'pi pi-sort-alpha-down',
+  },
+]
+
+const VISITOR_SORTS = [
+  {
+    value: 'recent',
+    label: 'Recent',
+    icon: 'pi pi-clock',
+  },
+  {
+    value: 'active',
+    label: 'Most events',
+    icon: 'pi pi-sort-amount-down',
+  },
+  {
+    value: 'longest',
+    label: 'Longest',
+    icon: 'pi pi-hourglass',
   },
 ]
 
@@ -196,6 +242,9 @@ const lastLoadedAt =
 |
 */
 
+const rootEl =
+  ref(null)
+
 const search =
   ref('')
 
@@ -215,6 +264,20 @@ const visibleCount =
 
 const showFilters =
   ref(false)
+
+/*
+ * 'events' is the flat list; 'visitors' groups the same
+ * events by ip_hash. selectedHash opens one visitor's
+ * trail inside the visitors view.
+ */
+const viewMode =
+  ref('events')
+
+const visitorSort =
+  ref('recent')
+
+const selectedHash =
+  ref(null)
 
 /*
 |--------------------------------------------------------------------------
@@ -379,6 +442,13 @@ function resolveToken() {
 | `CreatedAt`, not `created_at`. Accept both, and accept
 | milliseconds in case the column is ever widened.
 |
+| ip_hash gets the same treatment: `ip_hash` if the
+| field is tagged, Go's default `IpHash` / `IPHash` if
+| it isn't. Rows written before the column existed come
+| through with an empty hash and are left out of
+| visitor trails rather than lumped into one fake
+| visitor.
+|
 */
 
 function toDate(
@@ -404,6 +474,12 @@ function normaliseRow(
     row.created_at ??
     row.CreatedAt
 
+  const rawHash =
+    row.ip_hash ??
+    row.IpHash ??
+    row.IPHash ??
+    ''
+
   return {
     id:
       row.id,
@@ -417,6 +493,9 @@ function normaliseRow(
     item:
       row.corresponding_item_name ?? '',
 
+    ipHash:
+      String(rawHash).trim(),
+
     /*
      * Kept as sent, so the detail panel can show the
      * stored value rather than only a rendering of it.
@@ -427,6 +506,14 @@ function normaliseRow(
     createdAt:
       toDate(rawCreated),
   }
+}
+
+function timeOf(
+  event
+) {
+  return event.createdAt
+    ? event.createdAt.getTime()
+    : 0
 }
 
 /*
@@ -534,11 +621,24 @@ watch(
     hiddenNames,
     quickFilter,
     events,
+    viewMode,
+    visitorSort,
+    selectedHash,
   ],
   () => {
     visibleCount.value = PAGE_SIZE
   }
 )
+
+/*
+ * Leaving the visitors view closes any open trail, so
+ * coming back starts at the visitor list.
+ */
+watch(viewMode, mode => {
+  if (mode !== 'visitors') {
+    selectedHash.value = null
+  }
+})
 
 /*
 |--------------------------------------------------------------------------
@@ -621,6 +721,10 @@ const nameSummary =
       )
   })
 
+/*
+ * Search also matches the IP hash, so pasting a hash
+ * from elsewhere finds that visitor directly.
+ */
 const filteredEvents =
   computed(() => {
     const term =
@@ -650,6 +754,9 @@ const filteredEvents =
             .includes(term) ||
           event.item
             .toLowerCase()
+            .includes(term) ||
+          event.ipHash
+            .toLowerCase()
             .includes(term)
         )
       })
@@ -661,37 +768,31 @@ const sortedEvents =
       ...filteredEvents.value,
     ]
 
-    const time =
-      event =>
-        event.createdAt
-          ? event.createdAt.getTime()
-          : 0
-
     switch (sortBy.value) {
       case 'oldest':
         return rows.sort(
           (a, b) =>
-            time(a) - time(b)
+            timeOf(a) - timeOf(b)
         )
 
       case 'name':
         return rows.sort(
           (a, b) =>
             a.name.localeCompare(b.name) ||
-            time(b) - time(a)
+            timeOf(b) - timeOf(a)
         )
 
       case 'item':
         return rows.sort(
           (a, b) =>
             a.item.localeCompare(b.item) ||
-            time(b) - time(a)
+            timeOf(b) - timeOf(a)
         )
 
       default:
         return rows.sort(
           (a, b) =>
-            time(b) - time(a)
+            timeOf(b) - timeOf(a)
         )
     }
   })
@@ -704,12 +805,6 @@ const visibleEvents =
         0,
         visibleCount.value
       )
-  )
-
-const hasMore =
-  computed(() =>
-    sortedEvents.value.length >
-    visibleCount.value
   )
 
 const uniqueItemCount =
@@ -730,6 +825,566 @@ const activeFilterCount =
     (search.value.trim() ? 1 : 0) +
     (quickFilter.value !== 'all' ? 1 : 0)
   )
+
+const isFiltering =
+  computed(() =>
+    activeFilterCount.value > 0
+  )
+
+/*
+|--------------------------------------------------------------------------
+| Visitor trails
+|--------------------------------------------------------------------------
+|
+| Filters decide WHICH visitors are listed - anyone with
+| at least one matching event - but a visitor's trail
+| always holds everything they did in the loaded range.
+| "Visitors who scanned a QR code" is only useful if you
+| can then see what those visitors did before and after.
+|
+*/
+
+/*
+ * Every hashed event in scope, grouped by visitor and
+ * ordered oldest first, which is the order a trail is
+ * read in.
+ */
+const eventsByHash =
+  computed(() => {
+    const groups =
+      new Map()
+
+    for (
+      const event
+      of scopedEvents.value
+    ) {
+      if (!event.ipHash) {
+        continue
+      }
+
+      const list =
+        groups.get(event.ipHash)
+
+      if (list) {
+        list.push(event)
+      } else {
+        groups.set(
+          event.ipHash,
+          [event]
+        )
+      }
+    }
+
+    for (const list of groups.values()) {
+      list.sort(
+        (a, b) =>
+          timeOf(a) - timeOf(b)
+      )
+    }
+
+    return groups
+  })
+
+const matchedIds =
+  computed(
+    () =>
+      new Set(
+        filteredEvents
+          .value
+          .map(
+            event => event.id
+          )
+      )
+  )
+
+/*
+ * Events that pass the filters but carry no hash, so
+ * the visitors view can say how much it isn't showing.
+ */
+const unattributedCount =
+  computed(
+    () =>
+      filteredEvents
+        .value
+        .filter(
+          event => !event.ipHash
+        )
+        .length
+  )
+
+/*
+ * Consecutive repeats are folded together, so a visitor
+ * who viewed five items in a row reads as
+ * "item_view ×5" rather than five separate steps.
+ */
+function collapsePath(
+  trail
+) {
+  const runs = []
+
+  for (const event of trail) {
+    const previous =
+      runs[runs.length - 1]
+
+    if (
+      previous &&
+      previous.name === event.name
+    ) {
+      previous.count += 1
+    } else {
+      runs.push({
+        name: event.name,
+        count: 1,
+      })
+    }
+  }
+
+  return runs
+}
+
+function summariseTrail(
+  hash,
+  trail,
+  matches
+) {
+  const first =
+    trail.length
+      ? trail[0].createdAt
+      : null
+
+  const last =
+    trail.length
+      ? trail[trail.length - 1].createdAt
+      : null
+
+  let sessions =
+    trail.length ? 1 : 0
+
+  for (
+    let i = 1;
+    i < trail.length;
+    i += 1
+  ) {
+    if (
+      timeOf(trail[i]) -
+        timeOf(trail[i - 1]) >
+      SESSION_GAP_MS
+    ) {
+      sessions += 1
+    }
+  }
+
+  return {
+    hash,
+
+    events:
+      trail,
+
+    count:
+      trail.length,
+
+    matches,
+
+    first,
+
+    last,
+
+    span:
+      first && last
+        ? last.getTime() - first.getTime()
+        : 0,
+
+    sessions,
+
+    items:
+      new Set(
+        trail
+          .map(
+            event => event.item
+          )
+          .filter(Boolean)
+      ).size,
+
+    path:
+      collapsePath(trail),
+  }
+}
+
+const visitorGroups =
+  computed(() => {
+    const matchCounts =
+      new Map()
+
+    for (
+      const event
+      of filteredEvents.value
+    ) {
+      if (!event.ipHash) {
+        continue
+      }
+
+      matchCounts.set(
+        event.ipHash,
+        (matchCounts.get(event.ipHash) || 0) + 1
+      )
+    }
+
+    return Array.from(
+      matchCounts.entries()
+    ).map(
+      ([hash, matches]) =>
+        summariseTrail(
+          hash,
+          eventsByHash.value.get(hash) || [],
+          matches
+        )
+    )
+  })
+
+const sortedVisitors =
+  computed(() => {
+    const groups = [
+      ...visitorGroups.value,
+    ]
+
+    const lastTime =
+      group =>
+        group.last
+          ? group.last.getTime()
+          : 0
+
+    switch (visitorSort.value) {
+      case 'active':
+        return groups.sort(
+          (a, b) =>
+            b.count - a.count ||
+            lastTime(b) - lastTime(a)
+        )
+
+      case 'longest':
+        return groups.sort(
+          (a, b) =>
+            b.span - a.span ||
+            lastTime(b) - lastTime(a)
+        )
+
+      default:
+        return groups.sort(
+          (a, b) =>
+            lastTime(b) - lastTime(a)
+        )
+    }
+  })
+
+const visibleVisitors =
+  computed(() =>
+    sortedVisitors
+      .value
+      .slice(
+        0,
+        visibleCount.value
+      )
+  )
+
+/*
+ * The open trail is read from the unfiltered pool, so
+ * it stays whole even while filters are narrowing the
+ * visitor list behind it.
+ */
+const selectedTrail =
+  computed(() => {
+    if (
+      viewMode.value !== 'visitors' ||
+      !selectedHash.value
+    ) {
+      return null
+    }
+
+    const trail =
+      eventsByHash
+        .value
+        .get(selectedHash.value) || []
+
+    const matches =
+      trail.filter(
+        event =>
+          matchedIds.value.has(event.id)
+      ).length
+
+    return summariseTrail(
+      selectedHash.value,
+      trail,
+      matches
+    )
+  })
+
+/*
+ * Each step carries the time since the one before it,
+ * and a label where a new session begins, so pauses in
+ * the trail are visible without reading timestamps.
+ */
+const trailSteps =
+  computed(() => {
+    const trail =
+      selectedTrail.value
+        ? selectedTrail.value.events
+        : []
+
+    const multiSession =
+      selectedTrail.value &&
+      selectedTrail.value.sessions > 1
+
+    let session = 1
+
+    return trail.map(
+      (event, index) => {
+        const previous =
+          trail[index - 1]
+
+        const gap =
+          previous &&
+          previous.createdAt &&
+          event.createdAt
+            ? timeOf(event) - timeOf(previous)
+            : null
+
+        const breaksSession =
+          gap !== null &&
+          gap > SESSION_GAP_MS
+
+        if (breaksSession) {
+          session += 1
+        }
+
+        let sessionLabel = null
+
+        if (
+          index === 0 &&
+          multiSession
+        ) {
+          sessionLabel =
+            'Session 1'
+        } else if (breaksSession) {
+          sessionLabel =
+            `Session ${session}, ${formatDuration(gap)} later`
+        }
+
+        return {
+          event,
+          gap,
+          breaksSession,
+          sessionLabel,
+          matched:
+            matchedIds.value.has(event.id),
+        }
+      }
+    )
+  })
+
+const visibleSteps =
+  computed(() =>
+    trailSteps
+      .value
+      .slice(
+        0,
+        visibleCount.value
+      )
+  )
+
+async function openTrail(
+  hash
+) {
+  if (!hash) {
+    return
+  }
+
+  viewMode.value = 'visitors'
+
+  selectedHash.value = hash
+
+  /*
+   * Opened from deep in a long list, the trail would
+   * otherwise render above the fold with nothing
+   * apparently happening.
+   */
+  await nextTick()
+
+  if (rootEl.value) {
+    rootEl.value.scrollIntoView({
+      block: 'start',
+    })
+  }
+}
+
+function closeTrail() {
+  selectedHash.value = null
+}
+
+function shortHash(
+  hash
+) {
+  return hash && hash.length > 10
+    ? hash.slice(0, 8)
+    : hash || ''
+}
+
+function plural(
+  count,
+  word
+) {
+  return `${word}${count === 1 ? '' : 's'}`
+}
+
+function visitorMeta(
+  group
+) {
+  const parts = [
+    `${group.count} ${plural(group.count, 'event')}`,
+  ]
+
+  if (group.sessions > 1) {
+    parts.push(
+      `${group.sessions} sessions`
+    )
+  }
+
+  if (group.count > 1) {
+    parts.push(
+      `over ${formatDuration(group.span)}`
+    )
+  }
+
+  if (group.items) {
+    parts.push(
+      `${group.items} ${plural(group.items, 'item')}`
+    )
+  }
+
+  if (
+    isFiltering.value &&
+    group.matches < group.count
+  ) {
+    parts.push(
+      `${group.matches} matching`
+    )
+  }
+
+  return parts.join(' · ')
+}
+
+/*
+|--------------------------------------------------------------------------
+| What's on screen
+|--------------------------------------------------------------------------
+*/
+
+const showSkeleton =
+  computed(() =>
+    loading.value &&
+    !events.value.length
+  )
+
+const activeRowCount =
+  computed(() => {
+    if (selectedTrail.value) {
+      return trailSteps.value.length
+    }
+
+    if (viewMode.value === 'visitors') {
+      return sortedVisitors.value.length
+    }
+
+    return sortedEvents.value.length
+  })
+
+const hasMore =
+  computed(() =>
+    activeRowCount.value >
+    visibleCount.value
+  )
+
+const nextPageSize =
+  computed(() =>
+    Math.min(
+      PAGE_SIZE,
+      activeRowCount.value -
+        visibleCount.value
+    )
+  )
+
+const headline =
+  computed(() => {
+    if (selectedTrail.value) {
+      const {
+        count,
+        sessions,
+      } = selectedTrail.value
+
+      return {
+        count,
+        noun:
+          plural(count, 'event'),
+        detail:
+          `${sessions} ${plural(sessions, 'session')}`,
+      }
+    }
+
+    if (viewMode.value === 'visitors') {
+      const count =
+        sortedVisitors.value.length
+
+      const inGroups =
+        sortedVisitors
+          .value
+          .reduce(
+            (sum, group) =>
+              sum + group.count,
+            0
+          )
+
+      return {
+        count,
+        noun:
+          plural(count, 'visitor'),
+        detail:
+          inGroups
+            ? `${inGroups} ${plural(inGroups, 'event')}`
+            : '',
+      }
+    }
+
+    const count =
+      sortedEvents.value.length
+
+    const items =
+      uniqueItemCount.value
+
+    return {
+      count,
+      noun:
+        plural(count, 'event'),
+      detail:
+        items
+          ? `${items} ${plural(items, 'item')}`
+          : '',
+    }
+  })
+
+const emptyMessage =
+  computed(() => {
+    if (!events.value.length) {
+      return 'No events recorded in this period.'
+    }
+
+    if (
+      viewMode.value === 'visitors' &&
+      filteredEvents.value.length
+    ) {
+      return 'None of these events carry an IP hash, so there are no visitor trails to show.'
+    }
+
+    return 'No events match these filters.'
+  })
 
 function showMore() {
   visibleCount.value +=
@@ -809,37 +1464,21 @@ const anyExpanded =
 const copiedId =
   ref(null)
 
-async function copyRow(
-  event
+async function copyText(
+  text,
+  key
 ) {
-  const text =
-    JSON.stringify(
-      {
-        id: event.id,
-        client_id: event.clientId,
-        name: event.name,
-        corresponding_item_name: event.item,
-        created_at: event.epoch,
-        created_at_iso:
-          event.createdAt
-            ? event.createdAt.toISOString()
-            : null,
-      },
-      null,
-      2
-    )
-
   try {
     await navigator
       .clipboard
       .writeText(text)
 
-    copiedId.value = event.id
+    copiedId.value = key
 
     setTimeout(
       () => {
         if (
-          copiedId.value === event.id
+          copiedId.value === key
         ) {
           copiedId.value = null
         }
@@ -850,6 +1489,45 @@ async function copyRow(
     errorMessage.value =
       'Clipboard unavailable. Copy needs an https origin.'
   }
+}
+
+function copyRow(
+  event
+) {
+  copyText(
+    JSON.stringify(
+      {
+        id: event.id,
+        client_id: event.clientId,
+        name: event.name,
+        corresponding_item_name: event.item,
+        ip_hash: event.ipHash || null,
+        created_at: event.epoch,
+        created_at_iso:
+          event.createdAt
+            ? event.createdAt.toISOString()
+            : null,
+      },
+      null,
+      2
+    ),
+    event.id
+  )
+}
+
+function hashCopyKey(
+  hash
+) {
+  return `hash:${hash}`
+}
+
+function copyHash(
+  hash
+) {
+  copyText(
+    hash,
+    hashCopyKey(hash)
+  )
 }
 
 /*
@@ -889,6 +1567,15 @@ const stats =
           rows.map(
             event => event.clientId
           )
+        ).size,
+
+      visitors:
+        new Set(
+          rows
+            .map(
+              event => event.ipHash
+            )
+            .filter(Boolean)
         ).size,
 
       types:
@@ -978,7 +1665,9 @@ function clearFilters() {
 |
 | Derived from the name itself rather than a lookup
 | table, so a new event type gets a stable colour
-| without this component being taught about it.
+| without this component being taught about it. The
+| same function colours visitors by their hash, so a
+| visitor keeps one colour across the list and trail.
 |
 */
 
@@ -1099,9 +1788,53 @@ function formatExact(
 }
 
 /*
+ * Compact durations for gaps and spans: "45s",
+ * "2m 05s", "1h 12m", "3d 4h".
+ */
+function formatDuration(
+  ms
+) {
+  if (
+    ms === null ||
+    ms === undefined ||
+    ms < 0
+  ) {
+    return '—'
+  }
+
+  const seconds =
+    Math.round(ms / 1000)
+
+  if (seconds < 60) {
+    return `${seconds}s`
+  }
+
+  const minutes =
+    Math.floor(seconds / 60)
+
+  if (minutes < 60) {
+    return `${minutes}m ${String(seconds % 60).padStart(2, '0')}s`
+  }
+
+  const hours =
+    Math.floor(minutes / 60)
+
+  if (hours < 24) {
+    return `${hours}h ${String(minutes % 60).padStart(2, '0')}m`
+  }
+
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`
+}
+
+/*
 |--------------------------------------------------------------------------
 | CSV export
 |--------------------------------------------------------------------------
+|
+| Exports whatever is on screen: the open trail, every
+| listed visitor's full trail grouped by visitor, or
+| the flat event list.
+|
 */
 
 function escapeCell(
@@ -1115,9 +1848,26 @@ function escapeCell(
     : text
 }
 
+const exportRows =
+  computed(() => {
+    if (selectedTrail.value) {
+      return selectedTrail.value.events
+    }
+
+    if (viewMode.value === 'visitors') {
+      return sortedVisitors
+        .value
+        .flatMap(
+          group => group.events
+        )
+    }
+
+    return sortedEvents.value
+  })
+
 function exportCsv() {
   if (
-    !sortedEvents.value.length
+    !exportRows.value.length
   ) {
     return
   }
@@ -1125,18 +1875,20 @@ function exportCsv() {
   const header = [
     'id',
     'client_id',
+    'ip_hash',
     'name',
     'corresponding_item_name',
     'created_at',
   ].join(',')
 
   const body =
-    sortedEvents
+    exportRows
       .value
       .map(event =>
         [
           event.id,
           event.clientId,
+          event.ipHash,
           event.name,
           event.item,
           event.createdAt
@@ -1152,18 +1904,28 @@ function exportCsv() {
       .toISOString()
       .split('T')[0]
 
+  const scope =
+    selectedTrail.value
+      ? `_visitor_${shortHash(selectedTrail.value.hash)}`
+      : viewMode.value === 'visitors'
+        ? '_by_visitor'
+        : ''
+
   downloadCsv(
     [
       header,
       ...body,
     ].join('\n'),
-    `analytics_events_${days.value}d_${date}.csv`
+    `analytics_events_${days.value}d${scope}_${date}.csv`
   )
 }
 </script>
 
 <template>
-  <section class="events-app">
+  <section
+    ref="rootEl"
+    class="events-app"
+  >
     <!--
       Stays put while the list scrolls, so the range and
       search controls are always a thumb away.
@@ -1172,24 +1934,15 @@ function exportCsv() {
       <div class="events-bar-row">
         <div class="events-title">
           <strong>
-            {{ sortedEvents.length }}
+            {{ headline.count }}
           </strong>
 
           <span>
-            event{{
-              sortedEvents.length === 1
-                ? ''
-                : 's'
-            }}
+            {{ headline.noun }}
 
-            <template v-if="uniqueItemCount">
+            <template v-if="headline.detail">
               ·
-              {{ uniqueItemCount }}
-              item{{
-                uniqueItemCount === 1
-                  ? ''
-                  : 's'
-              }}
+              {{ headline.detail }}
             </template>
           </span>
         </div>
@@ -1229,6 +1982,38 @@ function exportCsv() {
             v-if="activeFilterCount"
             class="icon-button-dot"
           />
+        </button>
+      </div>
+
+      <!--
+        Flat list or grouped by visitor. Same events,
+        same filters, two ways of reading them.
+      -->
+      <div
+        class="segmented"
+        role="group"
+        aria-label="View"
+      >
+        <button
+          v-for="mode in VIEW_MODES"
+          :key="mode.value"
+          type="button"
+          class="segmented-option"
+          :class="{
+            'is-selected':
+              viewMode === mode.value,
+          }"
+          :aria-pressed="
+            viewMode === mode.value
+          "
+          @click="viewMode = mode.value"
+        >
+          <i
+            :class="mode.icon"
+            aria-hidden="true"
+          />
+
+          {{ mode.label }}
         </button>
       </div>
 
@@ -1299,9 +2084,13 @@ function exportCsv() {
     <!--
       Every figure reflects the current filters, so the
       strip answers "what am I looking at" rather than
-      "what was loaded".
+      "what was loaded". Hidden inside a trail, which
+      carries its own figures.
     -->
-    <dl class="stat-strip">
+    <dl
+      v-if="!selectedTrail"
+      class="stat-strip"
+    >
       <div class="stat">
         <dt>Events</dt>
         <dd>{{ stats.total }}</dd>
@@ -1310,6 +2099,11 @@ function exportCsv() {
       <div class="stat">
         <dt>Per day</dt>
         <dd>{{ perDay }}</dd>
+      </div>
+
+      <div class="stat">
+        <dt>Visitors</dt>
+        <dd>{{ stats.visitors }}</dd>
       </div>
 
       <div class="stat">
@@ -1366,8 +2160,8 @@ function exportCsv() {
           v-model="search"
           type="search"
           inputmode="search"
-          placeholder="Search events and items"
-          aria-label="Search events and items"
+          placeholder="Search events, items and IP hashes"
+          aria-label="Search events, items and IP hashes"
         />
 
         <button
@@ -1385,6 +2179,7 @@ function exportCsv() {
       </div>
 
       <div
+        v-if="viewMode === 'events'"
         class="segmented"
         role="group"
         aria-label="Sort order"
@@ -1411,6 +2206,44 @@ function exportCsv() {
           {{ option.label }}
         </button>
       </div>
+
+      <!-- A trail is always in time order, so no sort there -->
+      <div
+        v-else-if="!selectedTrail"
+        class="segmented"
+        role="group"
+        aria-label="Sort visitors"
+      >
+        <button
+          v-for="option in VISITOR_SORTS"
+          :key="option.value"
+          type="button"
+          class="segmented-option"
+          :class="{
+            'is-selected':
+              visitorSort === option.value,
+          }"
+          :aria-pressed="
+            visitorSort === option.value
+          "
+          @click="visitorSort = option.value"
+        >
+          <i
+            :class="option.icon"
+            aria-hidden="true"
+          />
+
+          {{ option.label }}
+        </button>
+      </div>
+
+      <p
+        v-if="viewMode === 'visitors'"
+        class="events-hint"
+      >
+        Filters choose which visitors are listed. Each
+        trail still shows everything that visitor did.
+      </p>
 
       <!--
         Chips double as filters: tapping one hides that
@@ -1466,7 +2299,7 @@ function exportCsv() {
           severity="secondary"
           outlined
           size="small"
-          :disabled="!sortedEvents.length"
+          :disabled="!exportRows.length"
           @click="exportCsv"
         />
       </div>
@@ -1485,7 +2318,7 @@ function exportCsv() {
 
     <!-- Skeleton rows, so the panel doesn't jump -->
     <div
-      v-if="loading && !events.length"
+      v-if="showSkeleton"
       class="events-list"
     >
       <div
@@ -1499,8 +2332,196 @@ function exportCsv() {
       </div>
     </div>
 
+    <!--
+      One visitor's trail, oldest first. Session breaks
+      mark gaps longer than SESSION_GAP_MS.
+    -->
+    <section
+      v-else-if="selectedTrail"
+      class="trail"
+      :style="badgeStyle(selectedTrail.hash)"
+      aria-label="Visitor trail"
+    >
+      <div class="trail-head">
+        <button
+          type="button"
+          class="icon-button"
+          aria-label="Back to visitors"
+          @click="closeTrail"
+        >
+          <i
+            class="pi pi-arrow-left"
+            aria-hidden="true"
+          />
+        </button>
+
+        <div class="trail-id">
+          <span class="trail-label">
+            Visitor
+          </span>
+
+          <code class="trail-hash">
+            {{ selectedTrail.hash }}
+          </code>
+        </div>
+
+        <button
+          type="button"
+          class="icon-button"
+          :aria-label="
+            copiedId === hashCopyKey(selectedTrail.hash)
+              ? 'IP hash copied'
+              : 'Copy IP hash'
+          "
+          @click="copyHash(selectedTrail.hash)"
+        >
+          <i
+            :class="
+              copiedId === hashCopyKey(selectedTrail.hash)
+                ? 'pi pi-check'
+                : 'pi pi-copy'
+            "
+            aria-hidden="true"
+          />
+        </button>
+      </div>
+
+      <dl class="stat-strip">
+        <div class="stat">
+          <dt>Events</dt>
+          <dd>{{ selectedTrail.count }}</dd>
+        </div>
+
+        <div class="stat">
+          <dt>Sessions</dt>
+          <dd>{{ selectedTrail.sessions }}</dd>
+        </div>
+
+        <div class="stat">
+          <dt>Duration</dt>
+          <dd>
+            {{
+              selectedTrail.count > 1
+                ? formatDuration(selectedTrail.span)
+                : '—'
+            }}
+          </dd>
+        </div>
+
+        <div class="stat">
+          <dt>Items</dt>
+          <dd>{{ selectedTrail.items }}</dd>
+        </div>
+
+        <div
+          v-if="selectedTrail.first"
+          class="stat is-wide"
+        >
+          <dt>First seen</dt>
+          <dd>{{ formatExact(selectedTrail.first) }}</dd>
+        </div>
+
+        <div
+          v-if="selectedTrail.last"
+          class="stat is-wide"
+        >
+          <dt>Last seen</dt>
+          <dd>{{ formatExact(selectedTrail.last) }}</dd>
+        </div>
+      </dl>
+
+      <p
+        v-if="!selectedTrail.count"
+        class="events-hint"
+      >
+        No events from this visitor in the selected
+        range. Widen the range or go back to the list.
+      </p>
+
+      <p
+        v-else-if="isFiltering"
+        class="events-hint"
+      >
+        {{ selectedTrail.matches }} of
+        {{ selectedTrail.count }} steps match your
+        filters. The rest are dimmed.
+      </p>
+
+      <ol
+        v-if="selectedTrail.count"
+        class="trail-steps"
+      >
+        <template
+          v-for="step in visibleSteps"
+          :key="step.event.id"
+        >
+          <li
+            v-if="step.sessionLabel"
+            class="trail-break"
+          >
+            {{ step.sessionLabel }}
+          </li>
+
+          <li
+            class="trail-step"
+            :class="{
+              'is-match':
+                isFiltering && step.matched,
+              'is-dim':
+                isFiltering && !step.matched,
+            }"
+          >
+            <span
+              class="trail-marker"
+              :style="badgeStyle(step.event.name)"
+              aria-hidden="true"
+            />
+
+            <div class="trail-body">
+              <span
+                class="event-badge"
+                :style="badgeStyle(step.event.name)"
+              >
+                {{ step.event.name }}
+              </span>
+
+              <span
+                class="event-item"
+                :title="step.event.item"
+              >
+                {{ step.event.item || '—' }}
+              </span>
+
+              <span class="trail-meta">
+                <time
+                  class="event-time"
+                  :datetime="
+                    step.event.createdAt
+                      ? step.event.createdAt.toISOString()
+                      : undefined
+                  "
+                >
+                  {{ formatExact(step.event.createdAt) || '—' }}
+                </time>
+
+                <small
+                  v-if="
+                    step.gap !== null &&
+                    !step.breaksSession
+                  "
+                  class="trail-gap"
+                >
+                  +{{ formatDuration(step.gap) }}
+                </small>
+              </span>
+            </div>
+          </li>
+        </template>
+      </ol>
+    </section>
+
     <div
-      v-else-if="!sortedEvents.length"
+      v-else-if="!activeRowCount"
       class="events-empty"
     >
       <i
@@ -1508,12 +2529,8 @@ function exportCsv() {
         aria-hidden="true"
       />
 
-      <p v-if="events.length">
-        No events match these filters.
-      </p>
-
-      <p v-else>
-        No events recorded in this period.
+      <p>
+        {{ emptyMessage }}
       </p>
 
       <Button
@@ -1526,205 +2543,299 @@ function exportCsv() {
       />
     </div>
 
-    <div
-      v-if="sortedEvents.length"
-      class="list-tools"
-    >
-      <Button
-        :label="
-          anyExpanded
-            ? 'Collapse all'
-            : 'Expand all'
-        "
-        :icon="
-          anyExpanded
-            ? 'pi pi-angle-double-up'
-            : 'pi pi-angle-double-down'
-        "
-        severity="secondary"
-        text
-        size="small"
-        @click="
-          anyExpanded
-            ? collapseAll()
-            : expandAll()
-        "
-      />
-
-      <span class="list-tools-count">
-        Showing
-        {{ visibleEvents.length }}
-        of
-        {{ sortedEvents.length }}
-      </span>
-    </div>
-
-    <ol
-      v-if="sortedEvents.length"
-      class="events-list"
-    >
-      <li
-        v-for="event in visibleEvents"
-        :key="event.id"
-        class="event-row"
-        :class="{
-          'is-open':
-            isExpanded(event.id),
-        }"
+    <!-- Visitors, one card per ip_hash -->
+    <template v-else-if="viewMode === 'visitors'">
+      <p
+        v-if="unattributedCount"
+        class="events-hint"
       >
-        <button
-          type="button"
-          class="event-head"
-          :aria-expanded="
-            isExpanded(event.id)
-          "
-          @click="
-            toggleExpanded(event.id)
-          "
+        {{ unattributedCount }}
+        {{ plural(unattributedCount, 'event') }}
+        without an IP hash
+        {{ unattributedCount === 1 ? 'is' : 'are' }}
+        left out of visitor trails.
+      </p>
+
+      <ol class="visitor-list">
+        <li
+          v-for="group in visibleVisitors"
+          :key="group.hash"
         >
-          <span
-            class="event-badge"
-            :style="
-              badgeStyle(event.name)
+          <button
+            type="button"
+            class="visitor-card"
+            :style="badgeStyle(group.hash)"
+            :aria-label="`Open trail for visitor ${shortHash(group.hash)}`"
+            @click="openTrail(group.hash)"
+          >
+            <span class="visitor-head">
+              <span
+                class="visitor-swatch"
+                aria-hidden="true"
+              />
+
+              <code
+                class="visitor-hash"
+                :title="group.hash"
+              >
+                {{ shortHash(group.hash) }}
+              </code>
+
+              <span
+                class="visitor-when"
+                :title="formatExact(group.last)"
+              >
+                {{ formatWhen(group.last) }}
+              </span>
+
+              <i
+                class="pi pi-chevron-right event-chevron"
+                aria-hidden="true"
+              />
+            </span>
+
+            <span class="visitor-path">
+              <template
+                v-for="(run, index) in group.path.slice(0, PATH_PREVIEW_STEPS)"
+                :key="index"
+              >
+                <i
+                  v-if="index"
+                  class="pi pi-angle-right visitor-path-sep"
+                  aria-hidden="true"
+                />
+
+                <span
+                  class="event-badge"
+                  :style="badgeStyle(run.name)"
+                >
+                  {{ run.name }}<template v-if="run.count > 1">
+                    ×{{ run.count }}</template>
+                </span>
+              </template>
+
+              <span
+                v-if="group.path.length > PATH_PREVIEW_STEPS"
+                class="visitor-path-more"
+              >
+                +{{ group.path.length - PATH_PREVIEW_STEPS }}
+              </span>
+            </span>
+
+            <span class="visitor-meta">
+              {{ visitorMeta(group) }}
+            </span>
+          </button>
+        </li>
+      </ol>
+    </template>
+
+    <!-- Flat event list -->
+    <template v-else>
+      <div class="list-tools">
+        <Button
+          :label="
+            anyExpanded
+              ? 'Collapse all'
+              : 'Expand all'
+          "
+          :icon="
+            anyExpanded
+              ? 'pi pi-angle-double-up'
+              : 'pi pi-angle-double-down'
+          "
+          severity="secondary"
+          text
+          size="small"
+          @click="
+            anyExpanded
+              ? collapseAll()
+              : expandAll()
+          "
+        />
+
+        <span class="list-tools-count">
+          Showing
+          {{ visibleEvents.length }}
+          of
+          {{ sortedEvents.length }}
+        </span>
+      </div>
+
+      <ol class="events-list">
+        <li
+          v-for="event in visibleEvents"
+          :key="event.id"
+          class="event-row"
+          :class="{
+            'is-open':
+              isExpanded(event.id),
+          }"
+        >
+          <button
+            type="button"
+            class="event-head"
+            :aria-expanded="
+              isExpanded(event.id)
+            "
+            @click="
+              toggleExpanded(event.id)
             "
           >
-            {{ event.name }}
-          </span>
-
-          <span
-            class="event-item"
-            :title="event.item"
-          >
-            {{ event.item || '—' }}
-          </span>
-
-          <span class="event-when">
-            <time
-              class="event-time"
-              :datetime="
-                event.createdAt
-                  ? event.createdAt.toISOString()
-                  : undefined
+            <span
+              class="event-badge"
+              :style="
+                badgeStyle(event.name)
               "
             >
-              {{ formatExact(event.createdAt) || '—' }}
-            </time>
+              {{ event.name }}
+            </span>
 
-            <small class="event-relative">
-              {{ formatWhen(event.createdAt) }}
-            </small>
-          </span>
+            <span
+              class="event-item"
+              :title="event.item"
+            >
+              {{ event.item || '—' }}
+            </span>
 
-          <i
-            class="pi pi-chevron-right event-chevron"
-            aria-hidden="true"
-          />
-        </button>
+            <span class="event-when">
+              <time
+                class="event-time"
+                :datetime="
+                  event.createdAt
+                    ? event.createdAt.toISOString()
+                    : undefined
+                "
+              >
+                {{ formatExact(event.createdAt) || '—' }}
+              </time>
 
-        <!--
-          Every stored column, in the shape the API sent
-          it - nothing here is a rendering of something
-          else.
-        -->
-        <dl
-          v-show="isExpanded(event.id)"
-          class="event-detail"
-        >
-          <div class="detail-pair">
-            <dt>Event ID</dt>
-            <dd>{{ event.id }}</dd>
-          </div>
+              <small class="event-relative">
+                {{ formatWhen(event.createdAt) }}
+              </small>
+            </span>
 
-          <div class="detail-pair">
-            <dt>Name</dt>
-            <dd>{{ event.name || '—' }}</dd>
-          </div>
-
-          <div class="detail-pair">
-            <dt>Item</dt>
-            <dd>{{ event.item || '—' }}</dd>
-          </div>
-
-          <div class="detail-pair">
-            <dt>Client ID</dt>
-            <dd class="is-mono">
-              {{ event.clientId || '—' }}
-            </dd>
-          </div>
-
-          <div class="detail-pair">
-            <dt>Timestamp</dt>
-            <dd>
-              {{ formatExact(event.createdAt) || '—' }}
-            </dd>
-          </div>
-
-          <div class="detail-pair">
-            <dt>ISO 8601</dt>
-            <dd class="is-mono">
-              {{
-                event.createdAt
-                  ? event.createdAt.toISOString()
-                  : '—'
-              }}
-            </dd>
-          </div>
-
-          <div class="detail-pair">
-            <dt>Epoch</dt>
-            <dd class="is-mono">
-              {{ event.epoch ?? '—' }}
-            </dd>
-          </div>
-
-          <div class="detail-actions">
-            <Button
-              :label="
-                copiedId === event.id
-                  ? 'Copied'
-                  : 'Copy JSON'
-              "
-              :icon="
-                copiedId === event.id
-                  ? 'pi pi-check'
-                  : 'pi pi-copy'
-              "
-              severity="secondary"
-              text
-              size="small"
-              @click="copyRow(event)"
+            <i
+              class="pi pi-chevron-right event-chevron"
+              aria-hidden="true"
             />
+          </button>
 
-            <Button
-              label="Filter to this item"
-              icon="pi pi-filter"
-              severity="secondary"
-              text
-              size="small"
-              :disabled="!event.item"
-              @click="
-                search = event.item;
-                showFilters = true
-              "
-            />
-          </div>
-        </dl>
-      </li>
-    </ol>
+          <!--
+            Every stored column, in the shape the API sent
+            it - nothing here is a rendering of something
+            else.
+          -->
+          <dl
+            v-show="isExpanded(event.id)"
+            class="event-detail"
+          >
+            <div class="detail-pair">
+              <dt>Event ID</dt>
+              <dd>{{ event.id }}</dd>
+            </div>
+
+            <div class="detail-pair">
+              <dt>Name</dt>
+              <dd>{{ event.name || '—' }}</dd>
+            </div>
+
+            <div class="detail-pair">
+              <dt>Item</dt>
+              <dd>{{ event.item || '—' }}</dd>
+            </div>
+
+            <div class="detail-pair">
+              <dt>Client ID</dt>
+              <dd class="is-mono">
+                {{ event.clientId || '—' }}
+              </dd>
+            </div>
+
+            <div class="detail-pair">
+              <dt>IP hash</dt>
+              <dd class="is-mono">
+                {{ event.ipHash || '—' }}
+              </dd>
+            </div>
+
+            <div class="detail-pair">
+              <dt>Timestamp</dt>
+              <dd>
+                {{ formatExact(event.createdAt) || '—' }}
+              </dd>
+            </div>
+
+            <div class="detail-pair">
+              <dt>ISO 8601</dt>
+              <dd class="is-mono">
+                {{
+                  event.createdAt
+                    ? event.createdAt.toISOString()
+                    : '—'
+                }}
+              </dd>
+            </div>
+
+            <div class="detail-pair">
+              <dt>Epoch</dt>
+              <dd class="is-mono">
+                {{ event.epoch ?? '—' }}
+              </dd>
+            </div>
+
+            <div class="detail-actions">
+              <Button
+                :label="
+                  copiedId === event.id
+                    ? 'Copied'
+                    : 'Copy JSON'
+                "
+                :icon="
+                  copiedId === event.id
+                    ? 'pi pi-check'
+                    : 'pi pi-copy'
+                "
+                severity="secondary"
+                text
+                size="small"
+                @click="copyRow(event)"
+              />
+
+              <Button
+                label="Filter to this item"
+                icon="pi pi-filter"
+                severity="secondary"
+                text
+                size="small"
+                :disabled="!event.item"
+                @click="
+                  search = event.item;
+                  showFilters = true
+                "
+              />
+
+              <Button
+                label="Show visitor trail"
+                icon="pi pi-user"
+                severity="secondary"
+                text
+                size="small"
+                :disabled="!event.ipHash"
+                @click="openTrail(event.ipHash)"
+              />
+            </div>
+          </dl>
+        </li>
+      </ol>
+    </template>
 
     <div
-      v-if="hasMore"
+      v-if="hasMore && !showSkeleton"
       class="events-more"
     >
       <Button
-        :label="
-          `Show ${
-            Math.min(
-              PAGE_SIZE,
-              sortedEvents.length - visibleCount
-            )
-          } more`
-        "
+        :label="`Show ${nextPageSize} more`"
         icon="pi pi-chevron-down"
         severity="secondary"
         outlined
@@ -1772,6 +2883,15 @@ function exportCsv() {
 .events-app > * {
   min-width: 0;
   max-width: 100%;
+}
+
+.icon-button:focus-visible,
+.segmented-option:focus-visible,
+.chip:focus-visible,
+.event-head:focus-visible,
+.visitor-card:focus-visible {
+  outline: 2px solid var(--p-primary-color, #3b82f6);
+  outline-offset: 2px;
 }
 
 /*
@@ -1949,6 +3069,13 @@ function exportCsv() {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
+}
+
+.events-hint {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  opacity: 0.6;
 }
 
 .search-field {
@@ -2301,6 +3428,265 @@ function exportCsv() {
 
 /*
 |--------------------------------------------------------------------------
+| Visitors
+|--------------------------------------------------------------------------
+|
+| Each visitor is tinted by the hue of its hash, on the
+| left edge here and on the trail header, so the same
+| visitor is recognisable in both places.
+|
+*/
+
+.visitor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.visitor-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.65rem 0.8rem 0.7rem;
+  border: 1px solid
+    var(--p-content-border-color, rgba(0, 0, 0, 0.09));
+  border-left: 3px solid
+    hsl(var(--badge-hue, 220) 55% 50%);
+  border-radius: 0.8rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.visitor-card:active {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.visitor-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.visitor-swatch {
+  flex: 0 0 auto;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: hsl(var(--badge-hue, 220) 55% 50%);
+}
+
+.visitor-hash {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  font-size: 0.85rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.visitor-when {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  opacity: 0.6;
+  white-space: nowrap;
+}
+
+.visitor-path {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.visitor-path-sep {
+  font-size: 0.6rem;
+  opacity: 0.35;
+}
+
+.visitor-path-more {
+  font-size: 0.72rem;
+  font-weight: 600;
+  opacity: 0.5;
+}
+
+.visitor-meta {
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.6;
+}
+
+/*
+|--------------------------------------------------------------------------
+| Trail
+|--------------------------------------------------------------------------
+|
+| A single vertical rule runs the length of the list;
+| each step's dot sits on it in the event's own colour.
+|
+*/
+
+.trail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.trail-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+  padding: 0.5rem 0.5rem 0.5rem 0.6rem;
+  border-left: 3px solid
+    hsl(var(--badge-hue, 220) 55% 50%);
+  border-radius: 0.8rem;
+  background: hsl(var(--badge-hue, 220) 55% 50% / 0.07);
+}
+
+.trail-id {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.trail-label {
+  font-size: 0.68rem;
+  opacity: 0.55;
+}
+
+.trail-hash {
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  font-size: 0.78rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.trail-steps {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trail-steps::before {
+  content: '';
+  position: absolute;
+  top: 0.5rem;
+  bottom: 0.5rem;
+  left: 0.75rem;
+  width: 2px;
+  transform: translateX(-50%);
+  background: var(--p-content-border-color, rgba(0, 0, 0, 0.12));
+}
+
+.trail-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1.5rem 1fr;
+  gap: 0.6rem;
+  padding: 0.45rem 0;
+  transition: opacity 0.15s ease;
+}
+
+.trail-step.is-dim {
+  opacity: 0.4;
+}
+
+.trail-marker {
+  position: relative;
+  z-index: 1;
+  justify-self: center;
+  width: 0.7rem;
+  height: 0.7rem;
+  margin-top: 0.3rem;
+  border-radius: 50%;
+  background: hsl(var(--badge-hue, 220) 60% 50%);
+  box-shadow: 0 0 0 3px var(--p-content-background, #fff);
+}
+
+.trail-step.is-match .trail-marker {
+  box-shadow:
+    0 0 0 3px var(--p-content-background, #fff),
+    0 0 0 5px hsl(var(--badge-hue, 220) 60% 50% / 0.45);
+}
+
+.trail-body {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas:
+    'badge meta'
+    'item  item';
+  align-items: center;
+  gap: 0.25rem 0.6rem;
+  min-width: 0;
+}
+
+.trail-meta {
+  grid-area: meta;
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.1rem 0.45rem;
+  min-width: 0;
+  text-align: right;
+}
+
+.trail-gap {
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  opacity: 0.5;
+}
+
+.trail-break {
+  position: relative;
+  padding: 0.6rem 0 0.2rem 2.1rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  opacity: 0.6;
+}
+
+.trail-break::before {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 0.75rem;
+  width: 0.6rem;
+  height: 0.6rem;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  background: var(--p-content-background, #fff);
+  transform: translate(-50%, -25%);
+}
+
+/*
+|--------------------------------------------------------------------------
 | Loading, empty, footer
 |--------------------------------------------------------------------------
 */
@@ -2414,6 +3800,16 @@ function exportCsv() {
     grid-column: 1 / -1;
   }
 
+  .trail-body {
+    grid-template-columns: 9rem 1fr auto;
+    grid-template-areas: 'badge item meta';
+    gap: 0.75rem;
+  }
+
+  .trail-meta {
+    flex-wrap: nowrap;
+  }
+
   .segmented-option {
     flex: 0 0 auto;
   }
@@ -2431,7 +3827,8 @@ function exportCsv() {
   .icon-button,
   .segmented-option,
   .chip,
-  .event-chevron {
+  .event-chevron,
+  .trail-step {
     transition: none;
   }
 
