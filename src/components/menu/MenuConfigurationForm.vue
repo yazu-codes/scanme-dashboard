@@ -17,6 +17,7 @@ const themeOptions = [
   { label: 'Classic', value: 'classic' },
   { label: 'Minimal', value: 'minimal' },
   { label: 'Modern', value: 'modern' },
+  { label: 'Noir', value: 'noir' },
 ]
 </script>
 
