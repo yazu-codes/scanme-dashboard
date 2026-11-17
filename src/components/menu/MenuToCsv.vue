@@ -8,8 +8,41 @@
     <label>Име на заведението (става име на файла)</label>
     <input type="text" v-model="venue" placeholder="напр. shery13" />
 
-    <label>Менюто (пействаш го тук)</label>
-    <textarea v-model="menuText" rows="12" placeholder="Супи&#10;* Пилешка супа1.90€ ..."></textarea>
+    <label>Снимки или PDF на менюто</label>
+    <div
+      class="dropzone"
+      :class="{ over: dragOver }"
+      @dragover.prevent="dragOver = true"
+      @dragleave.prevent="dragOver = false"
+      @drop.prevent="onDrop"
+      @click="$refs.fileInput.click()"
+    >
+      Пусни файлове тук или кликни, за да избереш.
+      <small>JPG, PNG, GIF, WEBP или PDF</small>
+    </div>
+    <input
+      ref="fileInput"
+      type="file"
+      accept="image/jpeg,image/png,image/gif,image/webp,application/pdf"
+      multiple
+      hidden
+      @change="onPick"
+    />
+
+    <ul v-if="files.length" class="files">
+      <li v-for="(f, i) in files" :key="f.id">
+        <img v-if="f.preview" :src="f.preview" alt="" />
+        <span v-else class="pdf-badge">PDF</span>
+        <span class="fname">{{ f.name }}</span>
+        <span class="fsize">{{ prettySize(f.size) }}</span>
+        <button class="small" @click="removeFile(i)">✕</button>
+      </li>
+    </ul>
+
+    <p v-if="sizeWarning" class="warn">{{ sizeWarning }}</p>
+
+    <label>Менюто като текст (по избор, ако не прикачваш файлове)</label>
+    <textarea v-model="menuText" rows="8" placeholder="Супи&#10;* Пилешка супа1.90€ ..."></textarea>
 
     <button :disabled="loading" @click="generate">
       {{ loading ? 'Генерирам...' : 'Генерирай CSV' }}
@@ -51,14 +84,24 @@
 </template>
 
 <script>
-import { ref, computed } from 'vue'
+import { ref, computed, onBeforeUnmount } from 'vue'
 
 const MODEL = 'claude-sonnet-5-5'
 const HEADERS = ['name', 'price', 'category', 'allergens', 'description', 'picture_url', 'display_order_position']
 
-const SYSTEM_PROMPT = `Превръщаш текст на обедно меню в JSON масив. Връщаш САМО валиден JSON масив, без обяснения и без markdown.
+// Media types the Messages API accepts as image blocks. HEIC from an iPhone
+// is NOT one of them — it has to be converted to JPEG first.
+const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+const PDF_TYPE = 'application/pdf'
+
+// The whole request is capped at 128MB and base64 inflates bytes by ~33%,
+// so warn well before the raw files get anywhere near that.
+const SIZE_WARN_BYTES = 20 * 1024 * 1024
+
+const SYSTEM_PROMPT = `Превръщаш обедно меню в JSON масив. Менюто може да е подадено като текст, като снимки или като PDF. Връщаш САМО валиден JSON масив, без обяснения и без markdown.
 Всеки елемент е обект с ключове: "name", "price", "category", "allergens", "description".
 Правила:
+- Прочети всички прикачени страници/снимки и обходи ястията в реда, в който се появяват. Ако има няколко файла, спазвай реда на файловете.
 - Запазвай реда на ястията, както са в текста.
 - "category" е заглавието на секцията (напр. Супи, Основно, Десерти), записано с главна първа буква и малки останали (ДЕСЕРТИ -> Десерти).
 - Игнорирай номерация и водещи символи като "1." или "*".
@@ -67,19 +110,93 @@ const SYSTEM_PROMPT = `Превръщаш текст на обедно меню 
 - Ако под ястие има бележка като "/постно/", добави я в името в скоби: "Манастирски гювеч (постно)".
 - "allergens" попълвай САМО ако са изрично посочени в текста за това ястие (запази ги, както са написани). Иначе е празен низ.
 - "description" попълвай САМО ако е изрично посочено в текста. Иначе е празен низ.
-- Не измисляй нищо, което го няма в текста.`
+- Ако нещо е нечетливо на снимката, пропусни го, вместо да гадаеш.
+- Не измисляй нищо, което го няма в менюто.`
 
 export default {
   setup() {
     const apiKey = ref(localStorage.getItem('claude_api_key') || '')
     const venue = ref('')
     const menuText = ref('')
+    const files = ref([])
+    const dragOver = ref(false)
     const rows = ref([])
     const loading = ref(false)
     const error = ref('')
     const copied = ref(false)
 
     const saveKey = () => localStorage.setItem('claude_api_key', apiKey.value.trim())
+
+    /* ---------------------------------------------------------------- files */
+
+    let nextId = 0
+
+    const prettySize = (bytes) => {
+      if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+      return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+    }
+
+    const totalBytes = computed(() => files.value.reduce((sum, f) => sum + f.size, 0))
+
+    const sizeWarning = computed(() => {
+      if (totalBytes.value <= SIZE_WARN_BYTES) return ''
+      return `Прикачените файлове са ${prettySize(totalBytes.value)}. Голяма заявка може да се провали — пробвай по-малко или по-смалени файлове.`
+    })
+
+    const addFiles = (list) => {
+      error.value = ''
+
+      for (const file of list) {
+        const isImage = IMAGE_TYPES.includes(file.type)
+        const isPdf = file.type === PDF_TYPE
+
+        if (!isImage && !isPdf) {
+          error.value = `"${file.name}" не е поддържан формат. Използвай JPG, PNG, GIF, WEBP или PDF.`
+          continue
+        }
+
+        files.value.push({
+          id: nextId++,
+          file,
+          name: file.name,
+          size: file.size,
+          type: file.type,
+          kind: isPdf ? 'pdf' : 'image',
+          // Object URL, not a data URL — no need to hold the whole file in a string
+          preview: isImage ? URL.createObjectURL(file) : '',
+        })
+      }
+    }
+
+    const onPick = (e) => {
+      addFiles(e.target.files || [])
+      e.target.value = '' // so picking the same file again still fires change
+    }
+
+    const onDrop = (e) => {
+      dragOver.value = false
+      addFiles(e.dataTransfer?.files || [])
+    }
+
+    const removeFile = (i) => {
+      const [gone] = files.value.splice(i, 1)
+      if (gone?.preview) URL.revokeObjectURL(gone.preview)
+    }
+
+    onBeforeUnmount(() => {
+      files.value.forEach((f) => f.preview && URL.revokeObjectURL(f.preview))
+    })
+
+    // FileReader gives "data:<type>;base64,<data>" — the API wants only the tail
+    const fileToBase64 = (file) =>
+      new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result).split(',')[1] || '')
+        reader.onerror = () => reject(new Error(`Не мога да прочета "${file.name}".`))
+        reader.readAsDataURL(file)
+      })
+
+    /* ------------------------------------------------------------ positions */
 
     // display_order_position: брояч, който почва от 1 във всяка категория
     const positions = computed(() => {
@@ -96,14 +213,45 @@ export default {
       return Number.isFinite(n) ? n.toFixed(2) : String(p ?? '')
     }
 
+    /* ------------------------------------------------------------- generate */
+
     const generate = async () => {
       error.value = ''
       copied.value = false
       if (!apiKey.value.trim()) return (error.value = 'Въведи Claude API ключ.')
-      if (!menuText.value.trim()) return (error.value = 'Постави текст на менюто.')
+      if (!menuText.value.trim() && !files.value.length) {
+        return (error.value = 'Прикачи снимки/PDF или постави текст на менюто.')
+      }
       saveKey()
       loading.value = true
+
       try {
+        // Docs recommend putting documents and images BEFORE the text block.
+        const content = []
+
+        for (const entry of files.value) {
+          const data = await fileToBase64(entry.file)
+
+          content.push(
+            entry.kind === 'pdf'
+              ? {
+                  type: 'document',
+                  source: { type: 'base64', media_type: PDF_TYPE, data },
+                }
+              : {
+                  type: 'image',
+                  source: { type: 'base64', media_type: entry.type, data },
+                }
+          )
+        }
+
+        content.push({
+          type: 'text',
+          text: menuText.value.trim()
+            ? menuText.value
+            : 'Извлечи всички ястия от прикаченото меню.',
+        })
+
         const res = await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: {
@@ -114,9 +262,9 @@ export default {
           },
           body: JSON.stringify({
             model: MODEL,
-            max_tokens: 4000,
+            max_tokens: 8000,
             system: SYSTEM_PROMPT,
-            messages: [{ role: 'user', content: menuText.value }],
+            messages: [{ role: 'user', content }],
           }),
         })
         const data = await res.json()
@@ -136,12 +284,18 @@ export default {
           description: x.description || '',
           picture_url: '',
         }))
+
+        if (data.stop_reason === 'max_tokens') {
+          error.value = 'Отговорът беше отрязан — някои ястия може да липсват. Пробвай по-малко страници наведнъж.'
+        }
       } catch (e) {
         error.value = e.message || String(e)
       } finally {
         loading.value = false
       }
     }
+
+    /* ------------------------------------------------------------------ csv */
 
     const addRow = () =>
       rows.value.push({ name: '', price: '', category: rows.value.at(-1)?.category || '', allergens: '', description: '', picture_url: '' })
@@ -178,7 +332,11 @@ export default {
       setTimeout(() => (copied.value = false), 2000)
     }
 
-    return { apiKey, venue, menuText, rows, loading, error, copied, positions, saveKey, generate, addRow, download, copy }
+    return {
+      apiKey, venue, menuText, files, dragOver, rows, loading, error, copied, positions,
+      sizeWarning, saveKey, generate, addRow, download, copy,
+      onPick, onDrop, removeFile, prettySize,
+    }
   },
 }
 </script>
@@ -192,9 +350,29 @@ button:disabled { opacity: 0.6; cursor: default; }
 button.small { padding: 4px 10px; margin-top: 6px; }
 .actions button { margin-right: 8px; }
 .error { color: #c53030; }
+.warn { color: #975a16; }
 .scroll { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; min-width: 760px; }
 th, td { padding: 2px; text-align: left; }
 td.narrow { width: 70px; }
 td input { padding: 4px; }
+
+.dropzone {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  padding: 20px; text-align: center; color: #555; cursor: pointer;
+  border: 2px dashed #bbb; border-radius: 8px;
+}
+.dropzone.over { border-color: #2b6cb0; color: #2b6cb0; }
+.dropzone small { color: #888; }
+
+.files { list-style: none; padding: 0; margin: 10px 0 0; }
+.files li { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.files img { width: 40px; height: 40px; object-fit: cover; border-radius: 4px; }
+.pdf-badge {
+  width: 40px; height: 40px; display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; color: #fff; background: #c53030; border-radius: 4px;
+}
+.fname { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fsize { color: #888; font-size: 12px; }
+.files button { margin-top: 0; }
 </style>
