@@ -18,8 +18,17 @@
         <label class="field">
           <span>Модел</span>
           <select v-model="model">
-            <option value="claude-sonnet-5-5">Sonnet — бърз</option>
+            <option value="claude-haiku-5-5">Haiku — най-евтин</option>
+            <option value="claude-sonnet-5-5">Sonnet — по-точен</option>
             <option value="claude-opus-5">Opus — за трудни снимки</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>Качество на снимките</span>
+          <select :value="scan.quality.value" @change="scan.setQuality($event.target.value)">
+            <option value="economy">Икономично — по-евтино</option>
+            <option value="normal">Нормално — дребен шрифт</option>
           </select>
         </label>
 
@@ -33,6 +42,11 @@
           />
         </label>
       </div>
+
+      <label class="inline">
+        <input type="checkbox" v-model="withLocation" />
+        Запомняй къде на снимката е всеки ред (за проверка; малко по-скъпо)
+      </label>
 
       <p v-if="knownCategories.length" class="note">
         Ще ползва категориите на това меню: {{ knownCategories.join(' · ') }}
@@ -91,7 +105,11 @@
       </details>
 
       <button class="primary" :disabled="scan.busy.value" @click="generate">
-        {{ scan.busy.value ? 'Чета менюто…' : 'Разчети менюто' }}
+        <template v-if="scan.busy.value && scan.progress.value">
+          Партида {{ scan.progress.value.done + 1 }} / {{ scan.progress.value.total }}…
+        </template>
+        <template v-else-if="scan.busy.value">Чета менюто…</template>
+        <template v-else>Разчети менюто</template>
       </button>
 
       <p v-if="scan.error.value" class="alert error" role="alert">{{ scan.error.value }}</p>
@@ -361,7 +379,8 @@ export default {
     const scan = useMenuScan()
 
     const apiKey = ref(localStorage.getItem('claude_api_key') || '')
-    const model = ref(localStorage.getItem('claude_model') || 'claude-sonnet-5-5')
+    const model = ref(localStorage.getItem('claude_model') || 'claude-haiku-5-5')
+    const withLocation = ref(localStorage.getItem('claude_scan_boxes') !== '0')
     const selectedMenuId = ref(props.currentMenuId ?? null)
     const menuText = ref('')
     const dragOver = ref(false)
@@ -444,6 +463,7 @@ export default {
 
       saveKey()
       localStorage.setItem('claude_model', model.value)
+      localStorage.setItem('claude_scan_boxes', withLocation.value ? '1' : '0')
 
       await scan.start({
         apiKey: apiKey.value.trim(),
@@ -451,6 +471,7 @@ export default {
         menuName: selectedMenu.value?.menu_owner?.menu_owner_name || '',
         knownCategories: knownCategories.value,
         menuText: menuText.value,
+        withLocation: withLocation.value,
       })
     }
 
@@ -688,7 +709,7 @@ export default {
     }
 
     return {
-      scan, apiKey, model, selectedMenuId, menuText, dragOver, copied, onlyWarnings, answers,
+      scan, apiKey, model, withLocation, selectedMenuId, menuText, dragOver, copied, onlyWarnings, answers,
       chatText, menuLabel, knownCategories, allCategories, prettySize, onPick, onDrop,
       generate, submitAnswers, groupedRows, includedCount, positionOf, addRow, removeRow,
       isCategoryOpen, toggleCategory, openCategory, toggleAllCategories, anyCategoryOpen,

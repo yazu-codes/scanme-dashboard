@@ -9,9 +9,10 @@ import { ref, computed } from 'vue'
 | validated payloads, so there is nothing to parse and a malformed answer is
 | impossible rather than merely unlikely.
 |
-| Two modes share one conversation:
-|   extract - read the files, one add_rows call per page
-|   edit    - change rows the user is reviewing, addressed by id
+| Cost shape, which drives most of the design below: the transcript is
+| re-sent on every turn, so a single long run grows as N^2. Running small
+| batches, asking for several pages per turn and caching the file blocks are
+| what keep a 30-photo menu in cents rather than dollars.
 |
 */
 
@@ -21,20 +22,29 @@ const API_VERSION = '2023-06-01'
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
 const PDF_TYPE = 'application/pdf'
 
-// ~2000px on the long side keeps small print readable while cutting the
-// image token count dramatically versus a full-size phone photo.
-const MAX_EDGE = 2000
+// Images cost ceil(w/28) * ceil(h/28) visual tokens, so the long edge is the
+// single biggest cost lever: 2000px = 3,888 tokens, 1400px = 1,900.
+export const QUALITY = {
+  normal: { maxEdge: 2000, label: 'Нормално (дребен шрифт)' },
+  economy: { maxEdge: 1400, label: 'Икономично (по-евтино)' },
+}
+
 const JPEG_QUALITY = 0.86
 
-const MAX_TURNS = 80
-const MAX_TOKENS = 32000
+// Files per conversation. Smaller batches mean a shorter transcript to
+// re-send, less context, and a failure that costs one batch not the lot.
+const BATCH_SIZE = 6
+
+// Pages per assistant turn. Fewer round trips means the transcript is
+// re-sent fewer times.
+const PAGES_PER_TURN = 3
+
+const MAX_TURNS = 40
+const MAX_TOKENS = 16000
 const MAX_UNDO = 20
 
 /* ------------------------------------------------------------------ rows */
 
-// Coordinates are integers 0-1000 relative to the page exactly as it was
-// sent, x left-to-right and y top-to-bottom, so they map straight to CSS
-// percentages at any display size.
 const BOX = {
   type: 'array',
   items: { type: 'integer', minimum: 0, maximum: 1000 },
@@ -54,11 +64,8 @@ const LOCATION_SCHEMA = {
   },
 }
 
-const ROW_SCHEMA = {
-  type: 'object',
-  required: ['name', 'price'],
-  properties: {
-    location: LOCATION_SCHEMA,
+function rowSchema(withLocation) {
+  const properties = {
     name: {
       type: 'string',
       description: 'Името на ястието, точно както е отпечатано. Не превеждай и не "поправяй".',
@@ -83,142 +90,149 @@ const ROW_SCHEMA = {
       type: 'string',
       description: 'Празно, ако си сигурен. Иначе кратка бележка, започваща с ⚠.',
     },
-  },
-}
+  }
 
-const ROWS_ARRAY = { type: 'array', items: ROW_SCHEMA }
+  if (withLocation) properties.location = LOCATION_SCHEMA
+
+  return { type: 'object', required: ['name', 'price'], properties }
+}
 
 /* ---------------------------------------------------------------- tools */
 
-const EXTRACT_TOOLS = [
-  {
-    name: 'ask_questions',
-    description:
-      'Питай потребителя за неща, които не можеш да разчетеш или решиш и които засягат МНОГО редове (напр. коя колона е цената, с ДДС ли са цените). За съмнение по един ред използвай warning, не въпрос.',
-    input_schema: {
-      type: 'object',
-      required: ['questions'],
-      properties: {
-        questions: {
-          type: 'array',
-          items: {
-            type: 'object',
-            required: ['id', 'question'],
-            properties: {
-              id: { type: 'string' },
-              question: { type: 'string' },
-              options: { type: 'array', items: { type: 'string' } },
-            },
-          },
-        },
-      },
-    },
-  },
-  {
-    name: 'add_rows',
-    description:
-      'Добави ястията от ЕДНА страница или файл, в реда на отпечатване. Максимум 50 реда на извикване; дълга страница се разделя на няколко извиквания.',
-    input_schema: {
-      type: 'object',
-      required: ['source', 'rows'],
-      properties: {
-        source: {
-          type: 'string',
-          description: 'Име на файла и страница, напр. "IMG_1234.jpg" или "menu.pdf стр.2"',
-        },
-        rows: ROWS_ARRAY,
-      },
-    },
-  },
-  {
-    name: 'finish',
-    description: 'Извикай веднъж, когато всички файлове и страници са обработени.',
-    input_schema: {
-      type: 'object',
-      required: ['summary'],
-      properties: {
-        venue_name: { type: 'string' },
-        currency: { type: 'string' },
-        prices_include_vat: { type: 'string', enum: ['yes', 'no', 'unknown'] },
-        summary: { type: 'string' },
-      },
-    },
-  },
-]
+function extractTools(withLocation) {
+  const rows = { type: 'array', items: rowSchema(withLocation) }
 
-const EDIT_TOOLS = [
-  {
-    name: 'update_rows',
-    description:
-      'Промени конкретни полета на съществуващи редове. Включвай САМО полетата, които се променят.',
-    input_schema: {
-      type: 'object',
-      required: ['updates'],
-      properties: {
-        updates: {
-          type: 'array',
-          items: {
-            type: 'object',
-            required: ['id', 'set'],
-            properties: {
-              id: { type: 'string' },
-              set: {
-                type: 'object',
-                description:
-                  'Поле → нова стойност. Позволени: name, price, category, allergens, description, warning, include',
+  return [
+    {
+      name: 'ask_questions',
+      description:
+        'Питай потребителя за неща, които не можеш да разчетеш или решиш и които засягат МНОГО редове (напр. коя колона е цената, с ДДС ли са цените). За съмнение по един ред използвай warning, не въпрос.',
+      input_schema: {
+        type: 'object',
+        required: ['questions'],
+        properties: {
+          questions: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['id', 'question'],
+              properties: {
+                id: { type: 'string' },
+                question: { type: 'string' },
+                options: { type: 'array', items: { type: 'string' } },
               },
             },
           },
         },
-        reason: { type: 'string', description: 'Един ред, който се показва на потребителя' },
       },
     },
-  },
-  {
-    name: 'delete_rows',
-    description: 'Премахни редове (дубликати, заглавия, взети по погрешка за ястия).',
-    input_schema: {
-      type: 'object',
-      required: ['ids'],
-      properties: {
-        ids: { type: 'array', items: { type: 'string' } },
-        reason: { type: 'string' },
+    {
+      name: 'add_rows',
+      description:
+        'Добави ястията от ЕДНА страница или файл, в реда на отпечатване. Може да извикаш няколко add_rows в един отговор - по едно за всяка страница.',
+      input_schema: {
+        type: 'object',
+        required: ['source', 'rows'],
+        properties: {
+          source: {
+            type: 'string',
+            description: 'Име на файла и страница, напр. "IMG_1234.jpg" или "menu.pdf стр.2"',
+          },
+          rows,
+        },
       },
     },
-  },
-  {
-    name: 'insert_rows',
-    description: 'Добави пропуснати ястия. Ползвай after_id за позиция; без него се добавят накрая.',
-    input_schema: {
-      type: 'object',
-      required: ['rows'],
-      properties: {
-        after_id: { type: 'string' },
-        source: { type: 'string' },
-        rows: ROWS_ARRAY,
+    {
+      name: 'finish',
+      description: 'Извикай веднъж, когато всички файлове от тази партида са обработени.',
+      input_schema: {
+        type: 'object',
+        required: ['summary'],
+        properties: {
+          venue_name: { type: 'string' },
+          currency: { type: 'string' },
+          prices_include_vat: { type: 'string', enum: ['yes', 'no', 'unknown'] },
+          summary: { type: 'string' },
+        },
       },
     },
-  },
-  {
-    name: 'replace_source',
-    description:
-      'Разчети наново цяла страница/файл, когато много редове на нея са грешни (напр. цените са изместени с един ред). Дай ВСИЧКИ редове на тази страница.',
-    input_schema: {
-      type: 'object',
-      required: ['source', 'rows'],
-      properties: { source: { type: 'string' }, rows: ROWS_ARRAY },
+  ]
+}
+
+function editTools(withLocation) {
+  const rows = { type: 'array', items: rowSchema(withLocation) }
+
+  return [
+    {
+      name: 'update_rows',
+      description:
+        'Промени конкретни полета на съществуващи редове. Включвай САМО полетата, които се променят.',
+      input_schema: {
+        type: 'object',
+        required: ['updates'],
+        properties: {
+          updates: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['id', 'set'],
+              properties: {
+                id: { type: 'string' },
+                set: {
+                  type: 'object',
+                  description:
+                    'Поле → нова стойност. Позволени: name, price, category, allergens, description, warning, include',
+                },
+              },
+            },
+          },
+          reason: { type: 'string', description: 'Един ред, който се показва на потребителя' },
+        },
+      },
     },
-  },
-]
+    {
+      name: 'delete_rows',
+      description: 'Премахни редове (дубликати, заглавия, взети по погрешка за ястия).',
+      input_schema: {
+        type: 'object',
+        required: ['ids'],
+        properties: {
+          ids: { type: 'array', items: { type: 'string' } },
+          reason: { type: 'string' },
+        },
+      },
+    },
+    {
+      name: 'insert_rows',
+      description: 'Добави пропуснати ястия. Ползвай after_id за позиция; без него се добавят накрая.',
+      input_schema: {
+        type: 'object',
+        required: ['rows'],
+        properties: { after_id: { type: 'string' }, source: { type: 'string' }, rows },
+      },
+    },
+    {
+      name: 'replace_source',
+      description:
+        'Разчети наново цяла страница/файл, когато много редове на нея са грешни (напр. цените са изместени с един ред). Дай ВСИЧКИ редове на тази страница. Възможно е само ако снимката е в текущия разговор.',
+      input_schema: {
+        type: 'object',
+        required: ['source', 'rows'],
+        properties: { source: { type: 'string' }, rows },
+      },
+    },
+  ]
+}
 
 /* ----------------------------------------------------------- system prompt */
 
-function buildSystemPrompt({ menuName, knownCategories }) {
+function buildSystemPrompt({ menuName, knownCategories, withLocation, priorAnswers }) {
   const lines = [
     `Превръщаш меню на заведение (снимки, PDF или текст, обикновено на български) в структурирани редове за дигитално меню.`,
     `Точността е по-важна от скоростта: тези редове отиват директно в менюто, което клиентите виждат.`,
     ``,
     `Обработвай файловете по ред. За всяка страница извиквай add_rows с ВСИЧКИ ястия на нея; никога не пропускай и не обобщавай.`,
+    `Групирай до ${PAGES_PER_TURN} страници в един отговор (по едно add_rows за всяка), за да не губим обороти.`,
     `Заглавията на секции не са ястия - те стават стойност на "category" за ястията под тях.`,
     `Ако един файл е дубликат на страница, която вече си обработил, не добавяй редовете ѝ отново; кажи го накратко.`,
     ``,
@@ -234,9 +248,17 @@ function buildSystemPrompt({ menuName, knownCategories }) {
     `Снимките често са под ъгъл или с подвита страница, така че колоните не съвпадат с имената. Свързвай по РЕД (n-тото име с n-тата цена) и проверявай дали стойността е правдоподобна за това ястие. Брой имената и цените на всяка страница; ако броят им се различава, сложи warning на засегнатите редове и попитай.`,
     `Игнорирай ръкописни знаци и маркери, освен ако не променят стойност.`,
     `Ако нещо е напълно нечетливо, пропусни го вместо да гадаеш.`,
-    ``,
-    `За всеки ред попълвай location: page, row_index, row_box (целият отпечатан ред) и value_box (точно клетката, от която прочете цената), като цели числа 0-1000 спрямо страницата, както я виждаш.`,
-    `При наклонени снимки value_box трябва да сочи цената, която ТИ си свързал с този ред, дори ако визуално е на друг ред. Това позволява на потребителя да провери свързването.`,
+  ]
+
+  if (withLocation) {
+    lines.push(
+      ``,
+      `За всеки ред попълвай location: page, row_index, row_box (целият отпечатан ред) и value_box (точно клетката, от която прочете цената), като цели числа 0-1000 спрямо страницата, както я виждаш.`,
+      `При наклонени снимки value_box трябва да сочи цената, която ТИ си свързал с този ред, дори ако визуално е на друг ред.`
+    )
+  }
+
+  lines.push(
     ``,
     `Игнорирай номерация и водещи символи като "1." или "*". Не измисляй нищо, което го няма в менюто.`,
     ``,
@@ -246,19 +268,21 @@ function buildSystemPrompt({ menuName, knownCategories }) {
     `След това потребителят преглежда редовете и може да поиска промени на естествен език. Тогава:`,
     `- Промяна по конкретни редове: update_rows (само променените полета).`,
     `- Премахване: delete_rows. Пропуснати ястия: insert_rows.`,
-    `- Системна грешка на цяла страница (напр. цените са изместени с един ред): replace_source с всички редове на страницата, прочетени наново от снимката.`,
-    `- Таблицата, която потребителят ти праща, е истината за текущото състояние - той може да е редактирал на ръка.`,
-    `- Не извиквай finish отново.`,
-  ]
+    `- Системна грешка на цяла страница: replace_source с всички редове на страницата.`,
+    `- Таблицата, която потребителят ти праща, е истината за текущото състояние.`,
+    `- Не извиквай finish отново.`
+  )
 
-  if (menuName || knownCategories?.length) {
+  if (menuName || knownCategories?.length || priorAnswers?.length) {
     lines.push('', 'Информация от потребителя:')
     if (menuName) lines.push(`- Менюто е за: ${menuName}`)
     if (knownCategories?.length) {
       lines.push(
-        `- В това меню вече съществуват следните категории. Използвай ТОЧНО тези имена, когато секцията отговаря на някоя от тях, вместо да измисляш нов вариант: ${knownCategories.join(', ')}`
+        `- В това меню вече съществуват следните категории. Използвай ТОЧНО тези имена, когато секцията отговаря на някоя от тях: ${knownCategories.join(', ')}`
       )
     }
+    // Carried across batches so the same question isn't asked again.
+    for (const a of priorAnswers || []) lines.push(`- ${a}`)
   }
 
   return lines.join('\n')
@@ -280,13 +304,14 @@ async function sha256(buf) {
   return b64(await crypto.subtle.digest('SHA-256', buf))
 }
 
-async function prepFile(file) {
+async function prepFile(file, maxEdge) {
   const buf = await file.arrayBuffer()
   const hash = await sha256(buf)
 
   const isPdf = file.type === PDF_TYPE || /\.pdf$/i.test(file.name)
   if (isPdf) {
     return {
+      source: file,
       name: file.name,
       kind: 'pdf',
       media: PDF_TYPE,
@@ -307,12 +332,10 @@ async function prepFile(file) {
     throw new Error(`"${file.name}" не е поддържан формат. Използвай JPG, PNG, GIF, WEBP или PDF.`)
   }
 
-  // Downscale before sending: image tokens grow with resolution, and a 12MP
-  // photo costs several times a 2000px one with no gain in readability.
   const bmp = await createImageBitmap(new Blob([buf], { type: file.type }), {
     imageOrientation: 'from-image',
   })
-  const k = Math.min(1, MAX_EDGE / Math.max(bmp.width, bmp.height))
+  const k = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height))
   const canvas = document.createElement('canvas')
   canvas.width = Math.round(bmp.width * k)
   canvas.height = Math.round(bmp.height * k)
@@ -322,13 +345,14 @@ async function prepFile(file) {
   const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', JPEG_QUALITY))
 
   return {
+    source: file,
     name: file.name,
     kind: 'image',
     media: 'image/jpeg',
     data: b64(await blob.arrayBuffer()),
     size: blob.size,
     hash,
-    // The exact pixels sent to Claude - needed later for source highlighting.
+    // The exact pixels sent to Claude - the viewer's coordinates depend on it.
     preview: URL.createObjectURL(blob),
   }
 }
@@ -341,11 +365,6 @@ function normalizePrice(p) {
   return Number.isFinite(n) ? n.toFixed(2) : ''
 }
 
-/*
- * Claude's boxes are approximate, so they are validated rather than
- * trusted: clamped to range, reversed corners swapped, and anything
- * smaller than a plausible row dropped.
- */
 function sanitizeBox(v) {
   if (!Array.isArray(v) || v.length !== 4) return null
 
@@ -420,8 +439,7 @@ function coerce(field, value) {
 /*
  * The viewer must display the EXACT pixels that were sent, because the
  * coordinates are relative to those. For photos that's the downscaled JPEG
- * kept as `preview`; for PDFs the page is rendered here. Aspect ratio is
- * preserved either way, so percentages still land.
+ * kept as `preview`; for PDFs the page is rendered here.
  */
 
 let pdfjs = null
@@ -441,7 +459,6 @@ async function loadPdfjs() {
     const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url')
     lib.GlobalWorkerOptions.workerSrc = worker.default
   } catch {
-    // Bundler couldn't resolve the worker: fall back to the matching CDN build.
     lib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${lib.version}/build/pdf.worker.min.mjs`
   }
 
@@ -488,26 +505,30 @@ export function useMenuScan() {
   const busy = ref(false)
   const error = ref('')
   const undoStack = ref([])
+  const progress = ref(null)
+  const quality = ref('normal')
 
-  // Conversation sent to the API, and tool_results waiting for the user's
-  // next message. Every tool_use MUST get a tool_result in the next user
-  // turn, so a pause parks them here rather than dropping them.
   let messages = []
   let pending = []
   let mode = 'extract'
-  let settings = { apiKey: '', model: '', menuName: '', knownCategories: [] }
+  let batchFiles = []
+  let priorAnswers = []
+  let settings = {
+    apiKey: '',
+    model: '',
+    menuName: '',
+    knownCategories: [],
+    withLocation: true,
+  }
 
   const totalBytes = computed(() => files.value.reduce((s, f) => s + f.size, 0))
   const warningCount = computed(() => rows.value.filter((r) => r.warning).length)
   const canUndo = computed(() => undoStack.value.length > 0)
-  const canChat = computed(() => rows.value.length > 0 && messages.length > 0)
 
   const log = (text, kind = 'info') => feed.value.push({ id: feed.value.length, text, kind })
 
   /* ---------------------------------------------------------------- undo */
 
-  // Whole-list snapshots: rows are small, flat objects, and this is far
-  // harder to get subtly wrong than per-field inverse operations.
   function pushUndo(label) {
     undoStack.value.push({ label, rows: rows.value.map((r) => ({ ...r })) })
     if (undoStack.value.length > MAX_UNDO) undoStack.value.shift()
@@ -524,10 +545,11 @@ export function useMenuScan() {
 
   async function addFiles(list) {
     error.value = ''
+    const maxEdge = QUALITY[quality.value].maxEdge
 
     for (const file of Array.from(list || [])) {
       try {
-        const prepared = await prepFile(file)
+        const prepared = await prepFile(file, maxEdge)
 
         if (files.value.some((f) => f.hash === prepared.hash)) {
           log(`${file.name}: вече е добавен (същият файл), пропуснат.`, 'warn')
@@ -540,6 +562,20 @@ export function useMenuScan() {
         error.value = e.message || String(e)
       }
     }
+  }
+
+  // Changing quality re-encodes what's already attached, from the original
+  // File handles kept on each entry.
+  async function setQuality(name) {
+    if (!QUALITY[name] || quality.value === name) return
+    quality.value = name
+
+    if (!files.value.length) return
+
+    const originals = files.value.map((f) => f.source).filter(Boolean)
+    files.value.forEach((f) => f.preview && URL.revokeObjectURL(f.preview))
+    files.value = []
+    await addFiles(originals)
   }
 
   function removeFile(index) {
@@ -570,27 +606,28 @@ export function useMenuScan() {
     return data
   }
 
-  function firstMessage(menuText) {
+  function fileBlock(f) {
+    return f.kind === 'pdf'
+      ? { type: 'document', source: { type: 'base64', media_type: f.media, data: f.data } }
+      : { type: 'image', source: { type: 'base64', media_type: f.media, data: f.data } }
+  }
+
+  function firstMessage(chunk, menuText) {
     const content = []
 
-    if (files.value.length) {
+    if (chunk.length) {
       content.push({
         type: 'text',
-        text: `Разчети тези ${files.value.length} файл(а). Подредени са по ред.`,
+        text: `Разчети тези ${chunk.length} файл(а). Подредени са по ред.`,
       })
 
-      files.value.forEach((f, i) => {
+      chunk.forEach((f, i) => {
         content.push({ type: 'text', text: `Файл ${i + 1}: ${f.name}` })
-        content.push(
-          f.kind === 'pdf'
-            ? { type: 'document', source: { type: 'base64', media_type: f.media, data: f.data } }
-            : { type: 'image', source: { type: 'base64', media_type: f.media, data: f.data } }
-        )
+        content.push(fileBlock(f))
       })
 
-      // Cache everything up to here. The loop re-sends the files on every
-      // turn, and so does every later chat edit; cached they cost a
-      // fraction of the input price.
+      // Cache everything up to here: the files are re-read on every turn of
+      // this batch, at a tenth of the input price.
       content[content.length - 1].cache_control = { type: 'ephemeral' }
     }
 
@@ -613,7 +650,7 @@ export function useMenuScan() {
     log(`${source}: ${fresh.length} ястия${warned ? ` (${warned} ⚠)` : ''}`)
 
     return {
-      result: `Получих ${fresh.length} реда от ${source}. Общо: ${rows.value.length}. Продължи със следващата страница или извикай finish.`,
+      result: `Получих ${fresh.length} реда от ${source}. Общо: ${rows.value.length}.`,
     }
   }
 
@@ -633,7 +670,7 @@ export function useMenuScan() {
   function handleFinish(input) {
     info.value = input
     if (input.summary) log(input.summary, 'done')
-    return { result: 'Благодаря. Потребителят ще прегледа редовете.', done: true }
+    return { result: 'Благодаря.', done: true }
   }
 
   /* -------------------------------------------------------- edit handlers */
@@ -662,8 +699,6 @@ export function useMenuScan() {
 
     log(`✎ ${reason || 'Промяна'}: ${changed} реда`, 'edit')
 
-    // Reporting unknown ids back lets Claude correct itself instead of
-    // silently believing the edit landed.
     return {
       result: `Променени ${changed} реда.${missing.length ? ` Непознати id: ${missing.join(', ')}` : ''}`,
     }
@@ -675,10 +710,9 @@ export function useMenuScan() {
     const before = rows.value.length
     const set = new Set(ids)
     rows.value = rows.value.filter((r) => !set.has(r.id))
-    const removed = before - rows.value.length
 
-    log(`✎ ${reason || 'Изтрити'}: ${removed} реда`, 'edit')
-    return { result: `Изтрити ${removed} реда.` }
+    log(`✎ ${reason || 'Изтрити'}: ${before - rows.value.length} реда`, 'edit')
+    return { result: `Изтрити ${before - rows.value.length} реда.` }
   }
 
   function handleInsertRows({ rows: incoming = [], after_id: afterId, source }) {
@@ -734,19 +768,28 @@ export function useMenuScan() {
         const data = await callClaude({
           model: settings.model,
           max_tokens: MAX_TOKENS,
-          system: buildSystemPrompt(settings),
-          tools: mode === 'extract' ? EXTRACT_TOOLS : EDIT_TOOLS,
+          // Array form so the prompt itself is cached too - it is identical
+          // on every turn and every batch.
+          system: [
+            {
+              type: 'text',
+              text: buildSystemPrompt({ ...settings, priorAnswers }),
+              cache_control: { type: 'ephemeral' },
+            },
+          ],
+          tools:
+            mode === 'extract'
+              ? extractTools(settings.withLocation)
+              : editTools(settings.withLocation),
           messages,
         })
 
-        // Cut off mid tool call: that answer is unusable, so drop it and
-        // ask for smaller batches instead of failing the whole run.
         if (data.stop_reason === 'max_tokens') {
           const last = messages[messages.length - 1]
           last.content = [].concat(last.content, [
             {
               type: 'text',
-              text: 'Предишният ти отговор беше отрязан. Използвай извиквания с най-много 30 реда.',
+              text: 'Предишният ти отговор беше отрязан. Извиквай по една страница наведнъж.',
             },
           ])
           log('Отговорът беше отрязан - пробвам пак с по-малки порции.', 'warn')
@@ -760,7 +803,7 @@ export function useMenuScan() {
         }
 
         const uses = data.content.filter((b) => b.type === 'tool_use')
-        if (!uses.length) break // Claude is talking, not working - wait for the user
+        if (!uses.length) break
 
         const results = []
         let pause = false
@@ -789,25 +832,60 @@ export function useMenuScan() {
 
         if (pause || done) {
           pending = results
-          break
+          return done ? 'done' : 'paused'
         }
 
         messages.push({ role: 'user', content: results })
       }
     } catch (e) {
       error.value = e.message || String(e)
-      // Keep the conversation valid: a trailing user turn with no answer
-      // would make every later request fail.
       while (messages.length > 1 && messages[messages.length - 1].role === 'user') messages.pop()
+      return 'error'
     } finally {
       busy.value = false
     }
+
+    return 'ended'
   }
 
-  /* --------------------------------------------------------------- entry */
+  /* --------------------------------------------------------------- batches */
 
-  async function start({ apiKey, model, menuName, knownCategories, menuText }) {
-    settings = { apiKey, model, menuName, knownCategories }
+  let queue = []
+  let pendingText = ''
+
+  function chunk(list, size) {
+    const out = []
+    for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size))
+    return out
+  }
+
+  async function runQueue() {
+    while (queue.length) {
+      const batch = queue.shift()
+      batchFiles = batch.files
+
+      progress.value = { done: progress.value.total - queue.length - 1, total: progress.value.total }
+      log(
+        `Партида ${progress.value.done + 1}/${progress.value.total}: ${batch.files.length || 'текст'} файл(а)`,
+        'batch'
+      )
+
+      mode = 'extract'
+      pending = []
+      messages = [firstMessage(batch.files, batch.text)]
+
+      const outcome = await run()
+
+      // A question stops the whole queue: the answer may change how the
+      // remaining batches should be read.
+      if (outcome === 'paused' || outcome === 'error') return
+    }
+
+    progress.value = null
+  }
+
+  async function start({ apiKey, model, menuName, knownCategories, menuText, withLocation }) {
+    settings = { apiKey, model, menuName, knownCategories, withLocation: withLocation !== false }
 
     error.value = ''
     rows.value = []
@@ -815,17 +893,23 @@ export function useMenuScan() {
     undoStack.value = []
     questions.value = null
     info.value = null
-    pending = []
-    mode = 'extract'
-    messages = [firstMessage(menuText)]
+    priorAnswers = []
+    pendingText = menuText || ''
 
-    log(
-      files.value.length
-        ? `Изпращам ${files.value.length} файл(а)...`
-        : 'Изпращам текста на менюто...'
-    )
+    const groups = files.value.length ? chunk(files.value, BATCH_SIZE) : [[]]
+    queue = groups.map((group, i) => ({
+      files: group,
+      // The pasted text rides along with the first batch only.
+      text: i === 0 ? pendingText : '',
+    }))
 
-    await run()
+    progress.value = { done: 0, total: queue.length }
+
+    if (queue.length > 1) {
+      log(`${files.value.length} файла в ${queue.length} партиди (по-евтино и по-сигурно).`)
+    }
+
+    await runQueue()
   }
 
   function answerQuestions(answers) {
@@ -838,6 +922,11 @@ export function useMenuScan() {
       q.list.map((x) => [x.id, String(answers[x.id] || '').trim() || 'не съм сигурен'])
     )
 
+    // Remembered so later batches don't ask the same thing again.
+    for (const item of q.list) {
+      priorAnswers.push(`${item.question} → ${payload[item.id]}`)
+    }
+
     messages.push({
       role: 'user',
       content: [
@@ -847,7 +936,10 @@ export function useMenuScan() {
     })
     pending = []
 
-    run()
+    run().then((outcome) => {
+      if (outcome !== 'paused' && outcome !== 'error' && queue.length) runQueue()
+      else if (!queue.length) progress.value = null
+    })
   }
 
   /* ---------------------------------------------------------- chat edits */
@@ -866,26 +958,35 @@ export function useMenuScan() {
   function sendChatEdit(text) {
     if (!text.trim() || busy.value) return
 
-    // Claude has the photos cached, but it cannot see the user's manual
-    // grid edits - so the current table travels with every request.
     mode = 'edit'
     log(text.trim(), 'user')
 
-    messages.push({
-      role: 'user',
-      content: [
-        ...pending,
-        {
-          type: 'text',
-          text: `${text.trim()}
+    const content = [...pending]
+
+    // Only the last batch's photos are in this conversation. If the request
+    // names a file from another batch, attach that one so a re-read is
+    // possible without paying for all of them.
+    const named = files.value.filter(
+      (f) => text.includes(f.name) && !batchFiles.includes(f)
+    )
+
+    for (const f of named) {
+      content.push({ type: 'text', text: `Файл: ${f.name}` })
+      content.push(fileBlock(f))
+      batchFiles = [...batchFiles, f]
+    }
+
+    content.push({
+      type: 'text',
+      text: `${text.trim()}
 
 Текущи редове (потребителят може да ги е редактирал на ръка; тази таблица е истината):
 ${rowsSnapshot()}
 
 Направи промяната с update_rows / delete_rows / insert_rows (или replace_source за цяла страница). Не извиквай finish.`,
-        },
-      ],
     })
+
+    messages.push({ role: 'user', content })
     pending = []
 
     run()
@@ -904,11 +1005,13 @@ ${rowsSnapshot()}
     busy,
     error,
     undoStack,
+    progress,
+    quality,
     totalBytes,
     warningCount,
     canUndo,
-    canChat,
     addFiles,
+    setQuality,
     removeFile,
     releaseFiles,
     start,
