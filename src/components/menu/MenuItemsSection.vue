@@ -502,6 +502,69 @@ function deleteItem(
   }
 }
 
+function deleteCategoryItems(
+  group
+) {
+  const count =
+    group.items.length
+
+  if (!count) {
+    return
+  }
+
+  const confirmed =
+    window.confirm(
+      `Delete all ${count} item${
+        count === 1
+          ? ''
+          : 's'
+      } in "${group.category}"? Press Save to apply.`
+    )
+
+  if (!confirmed) {
+    return
+  }
+
+  /*
+   * Replace the contents in place: the parent passed this array in, so
+   * reassigning it here would detach the draft.
+   */
+  const kept =
+    props.items.filter(
+      item =>
+        categoryOf(item) !==
+        group.category
+    )
+
+  props.items.splice(
+    0,
+    props.items.length,
+    ...kept
+  )
+
+  /*
+   * The group is gone, so it shouldn't linger in the open set and
+   * re-open a category of the same name created later.
+   */
+  if (
+    openCategories
+      .value
+      .has(group.category)
+  ) {
+    const next =
+      new Set(
+        openCategories.value
+      )
+
+    next.delete(
+      group.category
+    )
+
+    openCategories.value =
+      next
+  }
+}
+
 function enableAllItems() {
   if (
     !props.items.length
@@ -906,6 +969,27 @@ function exportCsv() {
         <span>
           {{ group.items.length }}
         </span>
+
+        <!--
+          @click.stop so deleting doesn't also collapse the group on
+          the way out.
+        -->
+        <Button
+          v-if="isAdmin"
+          icon="pi pi-trash"
+          severity="danger"
+          text
+          rounded
+          size="small"
+          :aria-label="`Delete all items in ${group.category}`"
+          :title="`Delete all items in ${group.category}`"
+          class="category-delete"
+          @click.stop="
+            deleteCategoryItems(
+              group
+            )
+          "
+        />
       </div>
 
       <div
@@ -1041,6 +1125,13 @@ function exportCsv() {
 
 .menu-item-category-heading span {
   margin-left: auto;
+}
+
+/*
+ * Sits after the count, which already claims the free space.
+ */
+.category-delete {
+  flex: 0 0 auto;
 }
 
 .category-chevron {
