@@ -59,6 +59,9 @@ import CodesDialog
 import ImagesDialog
   from '@/components/menu/ImagesDialog.vue'
 
+import MenuToCsvDialog
+  from '@/components/menu/MenuToCsvDialog.vue'
+
 import '@/styles/menu-dashboard.css'
 import '@/styles/menu-forms.css'
 import '@/styles/menu-dialogs.css'
@@ -97,6 +100,9 @@ const authBusy =
   ref(false)
 
 const showMenuAssociations =
+  ref(false)
+
+const showMenuToCsv =
   ref(false)
 
 /*
@@ -535,6 +541,9 @@ onMounted(
       @open-users="showSignupUser = true"
       @open-menu-associations="
         showMenuAssociations = true
+      "
+      @open-menu-to-csv="
+        showMenuToCsv = true
       "
     >
       <!--
@@ -985,6 +994,13 @@ onMounted(
         dashboard
           .menus
           .value
+      "
+    />
+
+    <!-- Menu → CSV -->
+    <MenuToCsvDialog
+      v-model:visible="
+        showMenuToCsv
       "
     />
   </div>
