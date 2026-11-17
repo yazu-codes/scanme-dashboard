@@ -1,4 +1,6 @@
 <script setup>
+import { ref } from 'vue'
+
 import Dialog from 'primevue/dialog'
 
 import MenuToCsv
@@ -25,6 +27,71 @@ const emit = defineEmits([
   'update:visible',
   'import',
 ])
+
+/*
+|--------------------------------------------------------------------------
+| Closing with work in progress
+|--------------------------------------------------------------------------
+|
+| Escape, the ✕ and the mask all arrive here as update:visible(false).
+| Nothing in the tool is persisted, so a stray Escape would throw away a
+| whole scan. Not re-emitting keeps the dialog open, because `visible` is
+| controlled by the parent.
+|
+*/
+
+const hasProgress =
+  ref(false)
+
+const isBusy =
+  ref(false)
+
+function handleVisible(
+  value
+) {
+  if (value) {
+    emit(
+      'update:visible',
+      true
+    )
+    return
+  }
+
+  if (isBusy.value) {
+    const stop =
+      window.confirm(
+        'Разчитането още тече. Ако затвориш сега, ще загубиш прочетеното дотук. Да затворя ли?'
+      )
+
+    if (!stop) {
+      return
+    }
+  } else if (hasProgress.value) {
+    const close =
+      window.confirm(
+        'Ще загубиш разчетените ястия и прикачените файлове. Да затворя ли?'
+      )
+
+    if (!close) {
+      return
+    }
+  }
+
+  emit(
+    'update:visible',
+    false
+  )
+}
+
+function handleState(
+  state
+) {
+  hasProgress.value =
+    state.hasProgress
+
+  isBusy.value =
+    state.busy
+}
 </script>
 
 <template>
@@ -35,10 +102,7 @@ const emit = defineEmits([
     :draggable="false"
     class="menu-dialog menu-to-csv-dialog"
     @update:visible="
-      emit(
-        'update:visible',
-        $event
-      )
+      handleVisible
     "
   >
     <!--
@@ -54,6 +118,9 @@ const emit = defineEmits([
           'import',
           $event
         )
+      "
+      @state="
+        handleState
       "
     />
   </Dialog>

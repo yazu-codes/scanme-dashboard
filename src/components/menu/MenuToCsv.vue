@@ -197,7 +197,10 @@
         <option v-for="c in allCategories" :key="c" :value="c" />
       </datalist>
 
-      <div class="review-layout" :class="{ split: showPane }">
+      <div
+        class="review-layout"
+        :class="{ split: showPane, 'sheet-open': sheetRow }"
+      >
       <div class="rows-col">
       <div
         v-for="group in groupedRows"
@@ -230,11 +233,12 @@
               warned: r.warning,
               excluded: !r.include,
               touched: r.edited === 'ai',
-              active: showPane && activeRow === r,
+              active: activeRow === r,
             }"
-            @mouseenter="hoverRow = r"
-            @mouseleave="hoverRow = null"
-            @focusin="hoverRow = r"
+            @mouseenter="showPane && (hoverRow = r)"
+            @mouseleave="showPane && (hoverRow = null)"
+            @focusin="showPane && (hoverRow = r)"
+            @click="cardTap(r, $event)"
           >
             <div class="dish-top">
               <span class="pos">{{ positionOf(r) || '–' }}</span>
@@ -309,7 +313,7 @@
           :file="fileFor(activeRow)"
           :row="activeRow"
           :rows="scan.rows.value"
-          inline
+          variant="pane"
           @select="pinnedRow = $event"
           @close="pinnedRow = null"
         />
@@ -320,7 +324,8 @@
       </aside>
       </div>
 
-      <div class="export-bar">
+      <!-- Hidden while the sheet is up: two bars can't share the bottom -->
+      <div v-show="!sheetRow" class="export-bar">
         <button
           v-if="canImport"
           class="primary"
@@ -339,20 +344,33 @@
       </p>
     </template>
 
-    <!-- Narrow screens: full-screen instead of a pane -->
+    <!-- Phone: docked at the bottom, cards still scrolling above -->
     <MenuScanSourceViewer
-      v-if="viewerRow && !showPane"
-      :file="fileFor(viewerRow)"
-      :row="viewerRow"
+      v-if="sheetRow"
+      :file="fileFor(sheetRow)"
+      :row="sheetRow"
       :rows="scan.rows.value"
-      @select="viewerRow = $event"
-      @close="viewerRow = null"
+      variant="sheet"
+      @select="pinnedRow = $event"
+      @expand="expanded = true"
+      @close="pinnedRow = null"
+    />
+
+    <!-- Full screen, from the sheet's expand button -->
+    <MenuScanSourceViewer
+      v-if="expanded && activeRow"
+      :file="fileFor(activeRow)"
+      :row="activeRow"
+      :rows="scan.rows.value"
+      variant="overlay"
+      @select="pinnedRow = $event"
+      @close="expanded = false"
     />
   </div>
 </template>
 
 <script>
-import { ref, reactive, computed, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue'
 
 import { useMenuScan } from '@/composables/useMenuScan'
 
@@ -373,7 +391,7 @@ export default {
 
   components: { MenuScanSourceViewer },
 
-  emits: ['import'],
+  emits: ['import', 'state'],
 
   setup(props, { emit }) {
     const scan = useMenuScan()
@@ -446,6 +464,15 @@ export default {
     }
 
     onBeforeUnmount(() => scan.releaseFiles())
+
+    // Lets the dialog warn before Escape throws a scan away.
+    watch(
+      () => [scan.rows.value.length, scan.files.value.length, scan.busy.value],
+      ([rowCount, fileCount, busy]) => {
+        emit('state', { hasProgress: rowCount > 0 || fileCount > 0, busy })
+      },
+      { immediate: true }
+    )
 
     /* --------------------------------------------------------- scanning */
 
@@ -594,9 +621,9 @@ export default {
 
     /* ----------------------------------------------------- source viewer */
 
-    const viewerRow = ref(null)
     const hoverRow = ref(null)
     const pinnedRow = ref(null)
+    const expanded = ref(false)
 
     // Wide enough for cards and a page side by side; below this the
     // viewer takes over the screen instead.
@@ -622,12 +649,25 @@ export default {
       )
     }
 
+    // Without a pane, the selected row goes to the bottom sheet instead.
+    const sheetRow = computed(() =>
+      !showPane.value && !expanded.value ? pinnedRow.value : null
+    )
+
     const openSource = (row) => {
-      if (showPane.value) {
-        pinnedRow.value = pinnedRow.value === row ? null : row
-        return
-      }
-      viewerRow.value = row
+      pinnedRow.value = pinnedRow.value === row ? null : row
+    }
+
+    /*
+     * Touch has no hover, so a tap on the card is the equivalent. Taps on
+     * the fields and buttons inside it have to pass through untouched.
+     */
+    const cardTap = (row, event) => {
+      if (showPane.value) return
+      if (!row.location) return
+      if (event.target.closest('input, button, select, textarea, label, a')) return
+
+      pinnedRow.value = pinnedRow.value === row ? null : row
     }
 
     /* ------------------------------------------------------- chat edits */
@@ -714,7 +754,7 @@ export default {
       generate, submitAnswers, groupedRows, includedCount, positionOf, addRow, removeRow,
       isCategoryOpen, toggleCategory, openCategory, toggleAllCategories, anyCategoryOpen,
       toggleOnlyWarnings, sendEdit, canImport, importIntoMenu, saveKey, download, copy,
-      viewerRow, hoverRow, pinnedRow, activeRow, showPane, fileFor, openSource,
+      hoverRow, pinnedRow, expanded, activeRow, sheetRow, showPane, fileFor, openSource, cardTap,
     }
   },
 }
@@ -1004,6 +1044,9 @@ button.ghost { background: #fff; border: 1px solid var(--line); }
   align-items: start;
 }
 .rows-col { min-width: 0; }
+
+/* Room to scroll the last cards clear of the sheet */
+.review-layout.sheet-open { padding-bottom: 48dvh; }
 
 .source-col {
   position: sticky;
