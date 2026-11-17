@@ -258,6 +258,14 @@
 
               <span class="source">{{ r.source }}</span>
 
+              <button
+                v-if="r.location"
+                class="icon-btn"
+                aria-label="Виж на снимката"
+                title="Виж на снимката"
+                @click="openSource(r)"
+              >⊙</button>
+
               <button class="icon-btn danger" aria-label="Изтрий ястието" @click="removeRow(r)">✕</button>
             </div>
           </li>
@@ -282,6 +290,15 @@
         За да ги внесеш направо, отвори същото меню в таблото.
       </p>
     </template>
+
+    <MenuScanSourceViewer
+      v-if="viewerRow"
+      :file="viewerFile"
+      :row="viewerRow"
+      :rows="scan.rows.value"
+      @select="viewerRow = $event"
+      @close="viewerRow = null"
+    />
   </div>
 </template>
 
@@ -289,6 +306,8 @@
 import { ref, reactive, computed, onBeforeUnmount } from 'vue'
 
 import { useMenuScan } from '@/composables/useMenuScan'
+
+import MenuScanSourceViewer from './MenuScanSourceViewer.vue'
 
 const HEADERS = [
   'name', 'price', 'category', 'allergens',
@@ -302,6 +321,8 @@ export default {
     menus: { type: Array, default: () => [] },
     currentMenuId: { type: [Number, String], default: null },
   },
+
+  components: { MenuScanSourceViewer },
 
   emits: ['import'],
 
@@ -519,6 +540,26 @@ export default {
       if (i !== -1) scan.rows.value.splice(i, 1)
     }
 
+    /* ----------------------------------------------------- source viewer */
+
+    const viewerRow = ref(null)
+
+    // Rows carry the source string Claude wrote ("IMG_1234.jpg стр.2"), so
+    // the file is matched by name rather than index.
+    const viewerFile = computed(() => {
+      const row = viewerRow.value
+      if (!row) return null
+      return (
+        scan.files.value.find((f) => String(row.source || '').includes(f.name)) ||
+        scan.files.value[0] ||
+        null
+      )
+    })
+
+    const openSource = (row) => {
+      viewerRow.value = row
+    }
+
     /* ------------------------------------------------------- chat edits */
 
     const sendEdit = () => {
@@ -603,6 +644,7 @@ export default {
       generate, submitAnswers, groupedRows, includedCount, positionOf, addRow, removeRow,
       isCategoryOpen, toggleCategory, openCategory, toggleAllCategories, anyCategoryOpen,
       toggleOnlyWarnings, sendEdit, canImport, importIntoMenu, saveKey, download, copy,
+      viewerRow, viewerFile, openSource,
     }
   },
 }

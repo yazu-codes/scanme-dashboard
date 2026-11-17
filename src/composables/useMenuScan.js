@@ -32,10 +32,33 @@ const MAX_UNDO = 20
 
 /* ------------------------------------------------------------------ rows */
 
+// Coordinates are integers 0-1000 relative to the page exactly as it was
+// sent, x left-to-right and y top-to-bottom, so they map straight to CSS
+// percentages at any display size.
+const BOX = {
+  type: 'array',
+  items: { type: 'integer', minimum: 0, maximum: 1000 },
+  minItems: 4,
+  maxItems: 4,
+  description: '[x0, y0, x1, y1] в 0-1000',
+}
+
+const LOCATION_SCHEMA = {
+  type: 'object',
+  description: 'Къде на страницата е отпечатан този ред',
+  properties: {
+    page: { type: 'integer', description: 'Номер на страница в PDF (от 1); 1 за снимки' },
+    row_index: { type: 'integer', description: 'Поред кой ред е на тази страница (от 1)' },
+    row_box: { ...BOX, description: 'Целият отпечатан ред, от името до цената' },
+    value_box: { ...BOX, description: 'Само клетката, от която прочете цената' },
+  },
+}
+
 const ROW_SCHEMA = {
   type: 'object',
   required: ['name', 'price'],
   properties: {
+    location: LOCATION_SCHEMA,
     name: {
       type: 'string',
       description: 'Името на ястието, точно както е отпечатано. Не превеждай и не "поправяй".',
@@ -212,6 +235,9 @@ function buildSystemPrompt({ menuName, knownCategories }) {
     `Игнорирай ръкописни знаци и маркери, освен ако не променят стойност.`,
     `Ако нещо е напълно нечетливо, пропусни го вместо да гадаеш.`,
     ``,
+    `За всеки ред попълвай location: page, row_index, row_box (целият отпечатан ред) и value_box (точно клетката, от която прочете цената), като цели числа 0-1000 спрямо страницата, както я виждаш.`,
+    `При наклонени снимки value_box трябва да сочи цената, която ТИ си свързал с този ред, дори ако визуално е на друг ред. Това позволява на потребителя да провери свързването.`,
+    ``,
     `Игнорирай номерация и водещи символи като "1." или "*". Не измисляй нищо, което го няма в менюто.`,
     ``,
     `Използвай ask_questions САМО за неща, които засягат много редове. Въпросите да са кратки, с предложени опции.`,
@@ -315,6 +341,44 @@ function normalizePrice(p) {
   return Number.isFinite(n) ? n.toFixed(2) : ''
 }
 
+/*
+ * Claude's boxes are approximate, so they are validated rather than
+ * trusted: clamped to range, reversed corners swapped, and anything
+ * smaller than a plausible row dropped.
+ */
+function sanitizeBox(v) {
+  if (!Array.isArray(v) || v.length !== 4) return null
+
+  const nums = v.map((n) => Math.round(Number(n)))
+  if (!nums.every(Number.isFinite)) return null
+
+  let [x0, y0, x1, y1] = nums.map((n) => Math.max(0, Math.min(1000, n)))
+  if (x1 < x0) [x0, x1] = [x1, x0]
+  if (y1 < y0) [y0, y1] = [y1, y0]
+
+  if ((x1 - x0) * (y1 - y0) < 1000) return null // < 0.1% of the page
+
+  return [x0, y0, x1, y1]
+}
+
+function sanitizeLocation(loc) {
+  if (!loc || typeof loc !== 'object') return null
+
+  const rowBox = sanitizeBox(loc.row_box)
+  const valueBox = sanitizeBox(loc.value_box)
+  if (!rowBox && !valueBox) return null
+
+  const page = Number(loc.page)
+  const index = Number(loc.row_index)
+
+  return {
+    page: Number.isFinite(page) && page > 0 ? Math.round(page) : 1,
+    row_index: Number.isFinite(index) && index > 0 ? Math.round(index) : null,
+    row_box: rowBox,
+    value_box: valueBox,
+  }
+}
+
 let nextRowId = 0
 
 function normalizeRow(raw, source) {
@@ -336,6 +400,7 @@ function normalizeRow(raw, source) {
     warning,
     include: true,
     edited: '',
+    location: sanitizeLocation(raw.location),
   }
 }
 
@@ -348,6 +413,68 @@ function coerce(field, value) {
   if (field === 'price') return normalizePrice(value)
   if (field === 'include') return Boolean(value)
   return String(value ?? '').trim()
+}
+
+/* ------------------------------------------------------- source rendering */
+
+/*
+ * The viewer must display the EXACT pixels that were sent, because the
+ * coordinates are relative to those. For photos that's the downscaled JPEG
+ * kept as `preview`; for PDFs the page is rendered here. Aspect ratio is
+ * preserved either way, so percentages still land.
+ */
+
+let pdfjs = null
+const pageCache = new Map()
+
+async function loadPdfjs() {
+  if (pdfjs) return pdfjs
+
+  let lib
+  try {
+    lib = await import('pdfjs-dist')
+  } catch {
+    throw new Error('За преглед на PDF страници е нужен пакетът pdfjs-dist (npm i pdfjs-dist).')
+  }
+
+  try {
+    const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url')
+    lib.GlobalWorkerOptions.workerSrc = worker.default
+  } catch {
+    // Bundler couldn't resolve the worker: fall back to the matching CDN build.
+    lib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${lib.version}/build/pdf.worker.min.mjs`
+  }
+
+  pdfjs = lib
+  return lib
+}
+
+export async function pageImageFor(file, page = 1) {
+  if (!file) return ''
+  if (file.kind === 'image') return file.preview
+
+  const key = `${file.hash}:${page}`
+  if (pageCache.has(key)) return pageCache.get(key)
+
+  const lib = await loadPdfjs()
+
+  const bytes = Uint8Array.from(atob(file.data), (c) => c.charCodeAt(0))
+  const doc = await lib.getDocument({ data: bytes }).promise
+  const pageNo = Math.min(Math.max(1, page), doc.numPages)
+  const pdfPage = await doc.getPage(pageNo)
+
+  const viewport = pdfPage.getViewport({ scale: 2 })
+  const canvas = document.createElement('canvas')
+  canvas.width = viewport.width
+  canvas.height = viewport.height
+  await pdfPage.render({ canvasContext: canvas.getContext('2d'), viewport }).promise
+
+  const url = await new Promise((r) =>
+    canvas.toBlob((b) => r(URL.createObjectURL(b)), 'image/jpeg', 0.9)
+  )
+
+  pageCache.set(key, url)
+  return url
 }
 
 /* ------------------------------------------------------------- composable */
