@@ -6,6 +6,19 @@ import MenuToCsv
 
 defineProps({
   visible: Boolean,
+
+  menus: {
+    type: Array,
+    default: () => [],
+  },
+
+  currentMenuId: {
+    type: [
+      Number,
+      String,
+    ],
+    default: null,
+  },
 })
 
 const emit = defineEmits([
@@ -30,7 +43,11 @@ const emit = defineEmits([
       The tool keeps its own heading, so it's hidden here
       to avoid printing the title twice.
     -->
-    <MenuToCsv class="in-dialog" />
+    <MenuToCsv
+      class="in-dialog"
+      :menus="menus"
+      :current-menu-id="currentMenuId"
+    />
   </Dialog>
 </template>
 

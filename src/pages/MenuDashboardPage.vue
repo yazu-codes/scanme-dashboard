@@ -997,10 +997,28 @@ onMounted(
       "
     />
 
-    <!-- Menu → CSV -->
+    <!--
+      Menu → CSV
+
+      The sidebar button is already admin-only, but the
+      dialog is gated too so nothing else can surface it
+      for a non-admin.
+    -->
     <MenuToCsvDialog
+      v-if="isAdmin"
       v-model:visible="
         showMenuToCsv
+      "
+      :menus="
+        dashboard
+          .menus
+          .value
+      "
+      :current-menu-id="
+        dashboard
+          .currentMenu
+          .value
+          ?.id
       "
     />
   </div>
