@@ -94,11 +94,11 @@
         {{ scan.busy.value ? 'Чета менюто…' : 'Разчети менюто' }}
       </button>
 
-      <p v-if="scan.error.value" class="alert error">{{ scan.error.value }}</p>
+      <p v-if="scan.error.value" class="alert error" role="alert">{{ scan.error.value }}</p>
     </section>
 
     <!-- ============================================== progress ========= -->
-    <ul v-if="scan.feed.value.length" class="feed">
+    <ul v-if="scan.feed.value.length" class="feed" aria-live="polite">
       <li v-for="line in scan.feed.value" :key="line.id" :class="line.kind">
         {{ line.text }}
       </li>
@@ -117,6 +117,7 @@
             :key="opt"
             class="chip"
             :class="{ picked: answers[q.id] === opt }"
+            :aria-pressed="answers[q.id] === opt"
             @click="answers[q.id] = opt"
           >{{ opt }}</button>
         </div>
@@ -142,8 +143,13 @@
             v-if="scan.warningCount.value"
             class="chip"
             :class="{ picked: onlyWarnings }"
-            @click="onlyWarnings = !onlyWarnings"
+            :aria-pressed="onlyWarnings"
+            @click="toggleOnlyWarnings"
           >Само за проверка</button>
+
+          <button class="chip" @click="toggleAllCategories">
+            {{ anyCategoryOpen ? 'Свий всички' : 'Разгъни всички' }}
+          </button>
 
           <button class="chip" @click="addRow">+ ястие</button>
         </div>
@@ -153,61 +159,90 @@
         <option v-for="c in allCategories" :key="c" :value="c" />
       </datalist>
 
-      <ul class="dishes">
-        <li
-          v-for="r in visibleRows"
-          :key="r.id"
-          class="dish"
-          :class="{ warned: r.warning, excluded: !r.include }"
+      <div
+        v-for="group in groupedRows"
+        :key="group.category"
+        class="group"
+        :class="{ open: isCategoryOpen(group.category) }"
+      >
+        <button
+          class="group-head"
+          :aria-expanded="isCategoryOpen(group.category)"
+          @click="toggleCategory(group.category)"
         >
-          <div class="dish-top">
-            <span class="pos">{{ positionOf(r) || '–' }}</span>
+          <span class="caret" aria-hidden="true">▸</span>
 
-            <input
-              v-model="r.name"
-              class="dish-name"
-              placeholder="Име на ястието"
-            />
+          <span class="group-name">{{ group.category }}</span>
 
-            <input
-              v-model="r.price"
-              class="dish-price"
-              inputmode="decimal"
-              placeholder="0.00"
-            />
-          </div>
+          <span v-if="group.warnings" class="group-warn">
+            {{ group.warnings }} ⚠
+          </span>
 
-          <p v-if="r.warning" class="dish-warning">{{ r.warning }}</p>
+          <span class="group-count">{{ group.rows.length }}</span>
+        </button>
 
-          <div class="dish-fields">
-            <label class="field">
-              <span>Категория</span>
-              <input v-model="r.category" list="known-categories" />
-            </label>
+        <ul v-show="isCategoryOpen(group.category)" class="dishes">
+          <li
+            v-for="r in group.rows"
+            :key="r.id"
+            class="dish"
+            :class="{ warned: r.warning, excluded: !r.include }"
+          >
+            <div class="dish-top">
+              <span class="pos">{{ positionOf(r) || '–' }}</span>
 
-            <label class="field">
-              <span>Алергени</span>
-              <input v-model="r.allergens" />
-            </label>
+              <input
+                v-model="r.name"
+                class="dish-name"
+                placeholder="Име на ястието"
+                aria-label="Име на ястието"
+              />
 
-            <label class="field wide">
-              <span>Описание</span>
-              <input v-model="r.description" />
-            </label>
-          </div>
+              <input
+                v-model="r.price"
+                class="dish-price"
+                inputmode="decimal"
+                placeholder="0.00"
+                aria-label="Цена"
+              />
+            </div>
 
-          <div class="dish-bottom">
-            <label class="switch">
-              <input type="checkbox" v-model="r.include" />
-              <span>{{ r.include ? 'Включено' : 'Пропуснато' }}</span>
-            </label>
+            <p v-if="r.warning" class="dish-warning">{{ r.warning }}</p>
 
-            <span class="source">{{ r.source }}</span>
+            <div class="dish-fields">
+              <label class="field">
+                <span>Категория</span>
+                <input
+                  v-model="r.category"
+                  list="known-categories"
+                  @change="openCategory(r.category)"
+                />
+              </label>
 
-            <button class="icon-btn danger" aria-label="Изтрий" @click="removeRow(r)">✕</button>
-          </div>
-        </li>
-      </ul>
+              <label class="field">
+                <span>Алергени</span>
+                <input v-model="r.allergens" />
+              </label>
+
+              <label class="field wide">
+                <span>Описание</span>
+                <input v-model="r.description" />
+              </label>
+            </div>
+
+            <div class="dish-bottom">
+              <label class="switch">
+                <input type="checkbox" v-model="r.include" />
+                <span>{{ r.include ? 'Включено' : 'Пропуснато' }}</span>
+              </label>
+
+              <span class="source">{{ r.source }}</span>
+
+              <button class="icon-btn danger" aria-label="Изтрий ястието" @click="removeRow(r)">✕</button>
+            </div>
+          </li>
+        </ul>
+      </div>
 
       <div class="export-bar">
         <button class="primary" @click="download">Свали .csv</button>
@@ -228,6 +263,8 @@ const HEADERS = [
   'name', 'price', 'category', 'allergens',
   'description', 'picture_url', 'display_order_position',
 ]
+
+const NO_CATEGORY = 'Без категория'
 
 export default {
   props: {
@@ -281,7 +318,6 @@ export default {
       return [...new Set([...fromTree, ...fromItems])]
     })
 
-    // Known categories plus whatever came back, for the datalist.
     const allCategories = computed(() => {
       const found = scan.rows.value.map((r) => r.category).filter(Boolean)
       return [...new Set([...knownCategories.value, ...found])]
@@ -348,6 +384,67 @@ export default {
 
     const includedCount = computed(() => exportRows.value.length)
 
+    const categoryOf = (r) => (r.category || '').trim() || NO_CATEGORY
+
+    const groupedRows = computed(() => {
+      const groups = new Map()
+
+      for (const r of visibleRows.value) {
+        const c = categoryOf(r)
+        if (!groups.has(c)) groups.set(c, [])
+        groups.get(c).push(r)
+      }
+
+      return [...groups.entries()].map(([category, rows]) => ({
+        category,
+        rows,
+        warnings: rows.filter((r) => r.warning).length,
+      }))
+    })
+
+    /* ------------------------------------------------- category folding */
+
+    // Tracks which categories are OPEN, so a category that appears later
+    // (a new scan, a renamed row) starts collapsed.
+    const openCategories = ref(new Set())
+
+    const isCategoryOpen = (c) => openCategories.value.has(c)
+
+    const openCategory = (name) => {
+      const c = (name || '').trim() || NO_CATEGORY
+      if (openCategories.value.has(c)) return
+      openCategories.value = new Set(openCategories.value).add(c)
+    }
+
+    const toggleCategory = (c) => {
+      const next = new Set(openCategories.value)
+      next.has(c) ? next.delete(c) : next.add(c)
+      openCategories.value = next
+    }
+
+    const anyCategoryOpen = computed(() =>
+      groupedRows.value.some((g) => isCategoryOpen(g.category))
+    )
+
+    const toggleAllCategories = () => {
+      openCategories.value = anyCategoryOpen.value
+        ? new Set()
+        : new Set(groupedRows.value.map((g) => g.category))
+    }
+
+    // Filtering to warnings with everything collapsed would show nothing,
+    // so opening the affected categories is part of the same action.
+    const toggleOnlyWarnings = () => {
+      onlyWarnings.value = !onlyWarnings.value
+
+      if (!onlyWarnings.value) return
+
+      const withWarnings = scan.rows.value.filter((r) => r.warning).map(categoryOf)
+      openCategories.value = new Set([...openCategories.value, ...withWarnings])
+    }
+
+    /* ---------------------------------------------------- row positions */
+
     // display_order_position: брояч, който почва от 1 във всяка категория
     const positions = computed(() => {
       const counters = {}
@@ -364,18 +461,23 @@ export default {
 
     const addRow = () => {
       onlyWarnings.value = false
+
+      const category = scan.rows.value.at(-1)?.category || ''
+
       scan.rows.value.push({
         id: `manual-${Date.now()}`,
         source: 'ръчно',
         name: '',
         price: '',
-        category: scan.rows.value.at(-1)?.category || '',
+        category,
         allergens: '',
         description: '',
         picture_url: '',
         warning: '',
         include: true,
       })
+
+      openCategory(category)
     }
 
     const removeRow = (row) => {
@@ -426,8 +528,9 @@ export default {
     return {
       scan, apiKey, model, selectedMenuId, menuText, dragOver, copied, onlyWarnings, answers,
       menuLabel, knownCategories, allCategories, prettySize, onPick, onDrop,
-      generate, submitAnswers, visibleRows, includedCount, positionOf, addRow, removeRow,
-      saveKey, download, copy,
+      generate, submitAnswers, groupedRows, includedCount, positionOf, addRow, removeRow,
+      isCategoryOpen, toggleCategory, openCategory, toggleAllCategories, anyCategoryOpen,
+      toggleOnlyWarnings, saveKey, download, copy,
     }
   },
 }
@@ -436,15 +539,15 @@ export default {
 <style scoped>
 .wrap {
   --ink: #16202b;
-  --muted: #65727f;
-  --line: #dde3e9;
-  --surface: #f5f7f9;
-  --accent: #2b6cb0;
-  --warn: #b45309;
-  --warn-soft: #fef6e7;
-  --danger: #c53030;
+  --muted: #5a6775;
+  --line: #d4dce4;
+  --surface: #f2f5f8;
+  --accent: #1f5c9e;
+  --warn: #9a5500;
+  --warn-soft: #fff6e6;
+  --danger: #b32222;
 
-  max-width: 1040px;
+  max-width: 1100px;
   margin: 0 auto;
   padding: 16px;
   color: var(--ink);
@@ -473,10 +576,10 @@ input, textarea, select {
   border-radius: 8px;
 }
 
-input:focus-visible, textarea:focus-visible, select:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-  border-color: var(--accent);
+input:focus-visible, textarea:focus-visible, select:focus-visible,
+button:focus-visible, .dropzone:focus-visible, .group-head:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
 }
 
 button {
@@ -490,14 +593,13 @@ button {
   color: var(--ink);
 }
 button:disabled { opacity: 0.55; cursor: default; }
-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 button.primary { background: var(--accent); color: #fff; }
 button.ghost { background: #fff; border: 1px solid var(--line); }
 
 .icon-btn {
-  min-height: 36px;
-  min-width: 36px;
+  min-height: 40px;
+  min-width: 40px;
   padding: 0;
   background: none;
   color: var(--muted);
@@ -506,8 +608,8 @@ button.ghost { background: #fff; border: 1px solid var(--line); }
 .icon-btn.danger { color: var(--danger); }
 
 .chip {
-  min-height: 36px;
-  padding: 6px 12px;
+  min-height: 40px;
+  padding: 8px 14px;
   font-size: 0.9rem;
   background: #fff;
   border: 1px solid var(--line);
@@ -524,18 +626,18 @@ button.ghost { background: #fff; border: 1px solid var(--line); }
   border-radius: 12px;
 }
 .panel > button.primary { margin-top: 14px; width: 100%; }
-.panel.asking { border-color: var(--accent); }
+.panel.asking { border-color: var(--accent); border-width: 2px; }
 
 .field-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 12px;
 }
 
 .note { margin: 10px 0 0; font-size: 0.8rem; color: var(--muted); }
 
 .alert { margin: 12px 0 0; padding: 10px 12px; border-radius: 8px; font-size: 0.9rem; }
-.alert.error { background: #fdeaea; color: var(--danger); }
+.alert.error { background: #fdecec; color: var(--danger); }
 
 /* ------------------------------------------------------------- files -- */
 
@@ -551,7 +653,7 @@ button.ghost { background: #fff; border: 1px solid var(--line); }
   border-radius: 10px;
   cursor: pointer;
 }
-.dropzone.over, .dropzone:focus-visible { border-color: var(--accent); background: #eef4fb; }
+.dropzone.over { border-color: var(--accent); background: #eaf2fb; }
 .dropzone span { font-size: 0.9rem; color: var(--muted); }
 .dropzone small { font-size: 0.75rem; color: var(--muted); }
 
@@ -575,7 +677,7 @@ button.ghost { background: #fff; border: 1px solid var(--line); }
 .file-size { font-size: 0.8rem; color: var(--muted); }
 
 .paste { margin-top: 14px; }
-.paste summary { cursor: pointer; font-size: 0.9rem; color: var(--accent); }
+.paste summary { cursor: pointer; font-size: 0.9rem; color: var(--accent); min-height: 32px; }
 .paste textarea { margin-top: 8px; }
 
 /* -------------------------------------------------------------- feed -- */
@@ -604,23 +706,83 @@ button.ghost { background: #fff; border: 1px solid var(--line); }
 .review-bar {
   position: sticky;
   top: 0;
-  z-index: 2;
+  z-index: 3;
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 10px;
   padding: 10px 0;
-  margin-bottom: 8px;
-  background: #fff;
+  margin-bottom: 10px;
+  background: var(--page-bg, #fff);
   border-bottom: 1px solid var(--line);
 }
 .counts { font-size: 0.95rem; color: var(--muted); }
 .counts strong { font-size: 1.15rem; color: var(--ink); }
-.warn-count { color: var(--warn); }
-.bar-actions { display: flex; gap: 8px; }
+.warn-count { color: var(--warn); font-weight: 600; }
+.bar-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
-.dishes { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+/* ------------------------------------------------------------ groups -- */
+
+.group {
+  margin-bottom: 10px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 56px;
+  padding: 12px 14px;
+  background: #fff;
+  border: 0;
+  border-radius: 0;
+  text-align: left;
+  font-size: 1rem;
+  font-weight: 600;
+}
+.group.open .group-head { border-bottom: 1px solid var(--line); }
+
+.caret {
+  flex: 0 0 auto;
+  color: var(--muted);
+  transition: transform 0.18s ease;
+}
+.group.open .caret { transform: rotate(90deg); }
+
+.group-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+
+.group-warn {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--warn);
+  background: var(--warn-soft);
+  border: 1px solid #e6cfa5;
+  border-radius: 999px;
+}
+
+.group-count {
+  flex: 0 0 auto;
+  min-width: 1.9rem;
+  padding: 2px 8px;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--muted);
+  background: var(--surface);
+  border-radius: 999px;
+}
+
+/* ------------------------------------------------------------ dishes -- */
+
+.dishes { list-style: none; padding: 10px; margin: 0; display: grid; gap: 10px; background: var(--surface); }
 
 .dish {
   padding: 12px;
@@ -631,7 +793,7 @@ button.ghost { background: #fff; border: 1px solid var(--line); }
   border-radius: 10px;
 }
 .dish.warned { border-left-color: var(--warn); background: var(--warn-soft); }
-.dish.excluded { opacity: 0.5; }
+.dish.excluded { opacity: 0.55; }
 
 .dish-top { display: flex; align-items: center; gap: 8px; }
 
@@ -656,12 +818,13 @@ button.ghost { background: #fff; border: 1px solid var(--line); }
   margin: 8px 0 0;
   padding-left: calc(1.75rem + 8px);
   font-size: 0.85rem;
+  font-weight: 600;
   color: var(--warn);
 }
 
 .dish-fields {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 10px;
   margin-top: 10px;
 }
@@ -691,11 +854,12 @@ button.ghost { background: #fff; border: 1px solid var(--line); }
 .export-bar {
   position: sticky;
   bottom: 0;
+  z-index: 3;
   display: flex;
   gap: 8px;
   padding: 12px 0;
   margin-top: 12px;
-  background: #fff;
+  background: var(--page-bg, #fff);
   border-top: 1px solid var(--line);
 }
 .export-bar button { flex: 1 1 auto; }
@@ -708,5 +872,9 @@ button.ghost { background: #fff; border: 1px solid var(--line); }
   .wrap { padding: 12px; }
   .panel { padding: 12px; }
   .dish-price { flex-basis: 4.5rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .caret { transition: none; }
 }
 </style>
