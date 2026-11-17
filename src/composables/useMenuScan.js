@@ -45,12 +45,15 @@ const MAX_UNDO = 20
 
 /* ------------------------------------------------------------------ rows */
 
+// Absolute pixels in the image as sent, NOT normalized: the docs are
+// explicit that Claude handles 0-1000 style values poorly. Our code
+// normalizes afterwards, using the dimensions we gave the model.
 const BOX = {
   type: 'array',
-  items: { type: 'integer', minimum: 0, maximum: 1000 },
+  items: { type: 'integer', minimum: 0 },
   minItems: 4,
   maxItems: 4,
-  description: '[x0, y0, x1, y1] в 0-1000',
+  description: '[x1, y1, x2, y2] в пиксели: горен ляв и долен десен ъгъл',
 }
 
 const LOCATION_SCHEMA = {
@@ -253,8 +256,10 @@ function buildSystemPrompt({ menuName, knownCategories, withLocation, priorAnswe
   if (withLocation) {
     lines.push(
       ``,
-      `За всеки ред попълвай location: page, row_index, row_box (целият отпечатан ред) и value_box (точно клетката, от която прочете цената), като цели числа 0-1000 спрямо страницата, както я виждаш.`,
-      `При наклонени снимки value_box трябва да сочи цената, която ТИ си свързал с този ред, дори ако визуално е на друг ред.`
+      `За всеки ред от СНИМКА попълвай location: row_index, row_box (целият отпечатан ред) и value_box (клетката, от която прочете цената).`,
+      `Координатите са в ПИКСЕЛИ на самата снимка - [x1, y1, x2, y2] = горен ляв и долен десен ъгъл, начало (0,0) горе вляво. Размерът на всяка снимка е написан до името ѝ.`,
+      `При наклонени снимки value_box трябва да сочи цената, която ТИ си свързал с този ред, дори ако визуално е на друг ред.`,
+      `За PDF файлове НЕ попълвай location - страниците се преоразмеряват и координатите не съвпадат.`
     )
   }
 
@@ -352,6 +357,12 @@ async function prepFile(file, maxEdge) {
     data: b64(await blob.arrayBuffer()),
     size: blob.size,
     hash,
+    // Told to Claude, and used to normalize the pixel boxes it returns.
+    // Both quality presets stay under the high-resolution tier's limits
+    // (2,576px edge / 4,784 visual tokens), so the API does not resize
+    // server-side and these dimensions are what the model actually sees.
+    width: canvas.width,
+    height: canvas.height,
     // The exact pixels sent to Claude - the viewer's coordinates depend on it.
     preview: URL.createObjectURL(blob),
   }
@@ -365,26 +376,40 @@ function normalizePrice(p) {
   return Number.isFinite(n) ? n.toFixed(2) : ''
 }
 
-function sanitizeBox(v) {
-  if (!Array.isArray(v) || v.length !== 4) return null
+/*
+ * Claude returns pixels; the viewer draws percentages. Converting here
+ * means the rest of the app never has to know the image's size.
+ */
+function sanitizeBox(v, dims) {
+  if (!Array.isArray(v) || v.length !== 4 || !dims) return null
 
-  const nums = v.map((n) => Math.round(Number(n)))
+  const nums = v.map((n) => Number(n))
   if (!nums.every(Number.isFinite)) return null
 
-  let [x0, y0, x1, y1] = nums.map((n) => Math.max(0, Math.min(1000, n)))
+  let [x0, y0, x1, y1] = nums
   if (x1 < x0) [x0, x1] = [x1, x0]
   if (y1 < y0) [y0, y1] = [y1, y0]
 
-  if ((x1 - x0) * (y1 - y0) < 1000) return null // < 0.1% of the page
+  const to1000 = (value, extent) =>
+    Math.max(0, Math.min(1000, Math.round((value / extent) * 1000)))
 
-  return [x0, y0, x1, y1]
+  const box = [
+    to1000(x0, dims.width),
+    to1000(y0, dims.height),
+    to1000(x1, dims.width),
+    to1000(y1, dims.height),
+  ]
+
+  if ((box[2] - box[0]) * (box[3] - box[1]) < 1000) return null // < 0.1% of the page
+
+  return box
 }
 
-function sanitizeLocation(loc) {
-  if (!loc || typeof loc !== 'object') return null
+function sanitizeLocation(loc, dims) {
+  if (!loc || typeof loc !== 'object' || !dims) return null
 
-  const rowBox = sanitizeBox(loc.row_box)
-  const valueBox = sanitizeBox(loc.value_box)
+  const rowBox = sanitizeBox(loc.row_box, dims)
+  const valueBox = sanitizeBox(loc.value_box, dims)
   if (!rowBox && !valueBox) return null
 
   const page = Number(loc.page)
@@ -400,7 +425,7 @@ function sanitizeLocation(loc) {
 
 let nextRowId = 0
 
-function normalizeRow(raw, source) {
+function normalizeRow(raw, source, dims) {
   const price = normalizePrice(raw.price)
   let warning = String(raw.warning || '').trim()
 
@@ -419,7 +444,7 @@ function normalizeRow(raw, source) {
     warning,
     include: true,
     edited: '',
-    location: sanitizeLocation(raw.location),
+    location: sanitizeLocation(raw.location, dims),
   }
 }
 
@@ -622,7 +647,8 @@ export function useMenuScan() {
       })
 
       chunk.forEach((f, i) => {
-        content.push({ type: 'text', text: `Файл ${i + 1}: ${f.name}` })
+        const dims = f.width ? ` (${f.width}x${f.height} px)` : ''
+        content.push({ type: 'text', text: `Файл ${i + 1}: ${f.name}${dims}` })
         content.push(fileBlock(f))
       })
 
@@ -640,9 +666,19 @@ export function useMenuScan() {
 
   /* -------------------------------------------------- extraction handlers */
 
+  // Rows name their file ("IMG_1234.jpg"), which is how the pixel boxes
+  // find the dimensions they have to be divided by.
+  function dimsForSource(source) {
+    const file = files.value.find((f) => String(source || '').includes(f.name))
+    return file?.width ? { width: file.width, height: file.height } : null
+  }
+
   function handleAddRows(input) {
     const source = input.source || 'без източник'
-    const fresh = (input.rows || []).map((r) => normalizeRow(r, source)).filter((r) => r.name)
+    const dims = dimsForSource(source)
+    const fresh = (input.rows || [])
+      .map((r) => normalizeRow(r, source, dims))
+      .filter((r) => r.name)
 
     rows.value.push(...fresh)
 
@@ -719,7 +755,7 @@ export function useMenuScan() {
     pushUndo('Добавени редове от Claude')
 
     const fresh = incoming
-      .map((r) => normalizeRow(r, source || 'добавено от Claude'))
+      .map((r) => normalizeRow(r, source || 'добавено от Claude', dimsForSource(source)))
       .filter((r) => r.name)
     fresh.forEach((r) => (r.edited = 'ai'))
 
@@ -737,7 +773,9 @@ export function useMenuScan() {
     const at = rows.value.findIndex((r) => r.source === source)
     const removed = rows.value.filter((r) => r.source === source).length
 
-    const fresh = incoming.map((r) => normalizeRow(r, source)).filter((r) => r.name)
+    const fresh = incoming
+      .map((r) => normalizeRow(r, source, dimsForSource(source)))
+      .filter((r) => r.name)
     fresh.forEach((r) => (r.edited = 'ai'))
 
     const kept = rows.value.filter((r) => r.source !== source)
