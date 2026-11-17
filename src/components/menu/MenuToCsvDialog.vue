@@ -23,6 +23,7 @@ defineProps({
 
 const emit = defineEmits([
   'update:visible',
+  'import',
 ])
 </script>
 
@@ -48,6 +49,12 @@ const emit = defineEmits([
       class="in-dialog"
       :menus="menus"
       :current-menu-id="currentMenuId"
+      @import="
+        emit(
+          'import',
+          $event
+        )
+      "
     />
   </Dialog>
 </template>

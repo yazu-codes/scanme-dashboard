@@ -152,8 +152,28 @@
           </button>
 
           <button class="chip" @click="addRow">+ ястие</button>
+
+          <button
+            v-if="scan.canUndo.value"
+            class="chip"
+            :disabled="scan.busy.value"
+            @click="scan.undo"
+          >Върни</button>
         </div>
       </div>
+
+      <!-- Chat editing: bulk fixes that would be tedious by hand -->
+      <form class="chat" @submit.prevent="sendEdit">
+        <input
+          v-model="chatText"
+          :disabled="scan.busy.value"
+          placeholder="напр. цените на стр. 2 са изместени с един ред"
+          aria-label="Какво да се промени"
+        />
+        <button class="primary" type="submit" :disabled="scan.busy.value || !chatText.trim()">
+          {{ scan.busy.value ? '…' : 'Промени' }}
+        </button>
+      </form>
 
       <datalist id="known-categories">
         <option v-for="c in allCategories" :key="c" :value="c" />
@@ -186,7 +206,7 @@
             v-for="r in group.rows"
             :key="r.id"
             class="dish"
-            :class="{ warned: r.warning, excluded: !r.include }"
+            :class="{ warned: r.warning, excluded: !r.include, touched: r.edited === 'ai' }"
           >
             <div class="dish-top">
               <span class="pos">{{ positionOf(r) || '–' }}</span>
@@ -245,11 +265,22 @@
       </div>
 
       <div class="export-bar">
-        <button class="primary" @click="download">Свали .csv</button>
+        <button
+          v-if="canImport"
+          class="primary"
+          @click="importIntoMenu"
+        >Внеси в менюто ({{ includedCount }})</button>
+
+        <button class="ghost" @click="download">Свали .csv</button>
+
         <button class="ghost" @click="copy">
           {{ copied ? 'Копирано ✓' : 'Копирай' }}
         </button>
       </div>
+
+      <p v-if="!canImport && selectedMenuId" class="note import-note">
+        За да ги внесеш направо, отвори същото меню в таблото.
+      </p>
     </template>
   </div>
 </template>
@@ -272,7 +303,9 @@ export default {
     currentMenuId: { type: [Number, String], default: null },
   },
 
-  setup(props) {
+  emits: ['import'],
+
+  setup(props, { emit }) {
     const scan = useMenuScan()
 
     const apiKey = ref(localStorage.getItem('claude_api_key') || '')
@@ -282,6 +315,7 @@ export default {
     const dragOver = ref(false)
     const copied = ref(false)
     const onlyWarnings = ref(false)
+    const chatText = ref('')
     const answers = reactive({})
 
     const saveKey = () => localStorage.setItem('claude_api_key', apiKey.value.trim())
@@ -485,6 +519,44 @@ export default {
       if (i !== -1) scan.rows.value.splice(i, 1)
     }
 
+    /* ------------------------------------------------------- chat edits */
+
+    const sendEdit = () => {
+      const text = chatText.value
+      if (!text.trim()) return
+
+      // Clear the previous highlight so only this change stands out.
+      scan.clearEditMarks()
+      chatText.value = ''
+      scan.sendChatEdit(text)
+    }
+
+    /* ----------------------------------------------------- direct import */
+
+    // Only when the tool's menu is the one open in the dashboard; pushing
+    // rows into a different draft would silently edit the wrong menu.
+    const canImport = computed(
+      () =>
+        selectedMenuId.value != null &&
+        props.currentMenuId != null &&
+        String(selectedMenuId.value) === String(props.currentMenuId)
+    )
+
+    const importIntoMenu = () => {
+      const items = exportRows.value.map((r) => ({
+        name: r.name,
+        price: Number(r.price || 0),
+        category: r.category,
+        allergens: r.allergens,
+        description: r.description,
+        picture_url: r.picture_url || '',
+        display_order_position: Number(positions.value[r.id] || 0),
+        enabled: true,
+      }))
+
+      emit('import', { menuId: selectedMenuId.value, items })
+    }
+
     /* -------------------------------------------------------------- csv */
 
     const esc = (v) => {
@@ -527,10 +599,10 @@ export default {
 
     return {
       scan, apiKey, model, selectedMenuId, menuText, dragOver, copied, onlyWarnings, answers,
-      menuLabel, knownCategories, allCategories, prettySize, onPick, onDrop,
+      chatText, menuLabel, knownCategories, allCategories, prettySize, onPick, onDrop,
       generate, submitAnswers, groupedRows, includedCount, positionOf, addRow, removeRow,
       isCategoryOpen, toggleCategory, openCategory, toggleAllCategories, anyCategoryOpen,
-      toggleOnlyWarnings, saveKey, download, copy,
+      toggleOnlyWarnings, sendEdit, canImport, importIntoMenu, saveKey, download, copy,
     }
   },
 }
@@ -794,6 +866,18 @@ button.ghost { background: #fff; border: 1px solid var(--line); }
 }
 .dish.warned { border-left-color: var(--warn); background: var(--warn-soft); }
 .dish.excluded { opacity: 0.55; }
+
+/* Rows Claude just changed, so the result of an edit is visible at a glance */
+.dish.touched { box-shadow: 0 0 0 2px var(--accent); }
+
+.chat { display: flex; gap: 8px; margin-bottom: 12px; }
+.chat input { flex: 1 1 auto; min-width: 0; }
+.chat button { flex: 0 0 auto; }
+
+.feed li.user { font-weight: 600; }
+.feed li.edit { color: var(--accent); }
+
+.import-note { margin-top: 8px; text-align: center; }
 
 .dish-top { display: flex; align-items: center; gap: 8px; }
 

@@ -291,6 +291,68 @@ function setAllSections(
 
 /*
 |--------------------------------------------------------------------------
+| Import from the menu scanner
+|--------------------------------------------------------------------------
+|
+| The scanned rows become draft items, exactly like a CSV import: nothing
+| is sent anywhere until the normal Save button is pressed.
+|
+*/
+
+function handleScanImport(
+  payload
+) {
+  const draft =
+    dashboard
+      .draftMenu
+      .value
+
+  if (
+    !draft ||
+    String(payload?.menuId) !==
+      String(draft.id)
+  ) {
+    window.alert(
+      'Отвори същото меню в таблото, преди да внесеш ястията.'
+    )
+    return
+  }
+
+  const incoming =
+    payload.items || []
+
+  if (!incoming.length) {
+    return
+  }
+
+  for (
+    const values
+    of incoming
+  ) {
+    items.value.push({
+      _key:
+        Math
+          .random()
+          .toString(36)
+          .slice(2, 10),
+
+      menu_id:
+        draft.id,
+
+      ...values,
+    })
+  }
+
+  showMenuToCsv.value =
+    false
+
+  window.alert(
+    `${incoming.length} ястия са добавени като чернова. Натисни "Save", за да ги запишеш.`
+  )
+}
+
+/*
+|--------------------------------------------------------------------------
 | Login
 |--------------------------------------------------------------------------
 */
@@ -1019,6 +1081,9 @@ onMounted(
           .currentMenu
           .value
           ?.id
+      "
+      @import="
+        handleScanImport
       "
     />
   </div>

@@ -5,9 +5,13 @@ import { ref, computed } from 'vue'
 | Menu scanning (images / PDF -> rows)
 |--------------------------------------------------------------------------
 |
-| Claude never returns rows as free text. It calls `add_rows` once per page
-| with a JSON-schema-validated payload, so there is nothing to parse and a
-| malformed answer is impossible rather than merely unlikely.
+| Claude never returns rows as free text. It calls tools with JSON-schema
+| validated payloads, so there is nothing to parse and a malformed answer is
+| impossible rather than merely unlikely.
+|
+| Two modes share one conversation:
+|   extract - read the files, one add_rows call per page
+|   edit    - change rows the user is reviewing, addressed by id
 |
 */
 
@@ -24,8 +28,9 @@ const JPEG_QUALITY = 0.86
 
 const MAX_TURNS = 80
 const MAX_TOKENS = 32000
+const MAX_UNDO = 20
 
-/* ------------------------------------------------------------------ tools */
+/* ------------------------------------------------------------------ rows */
 
 const ROW_SCHEMA = {
   type: 'object',
@@ -58,7 +63,11 @@ const ROW_SCHEMA = {
   },
 }
 
-const TOOLS = [
+const ROWS_ARRAY = { type: 'array', items: ROW_SCHEMA }
+
+/* ---------------------------------------------------------------- tools */
+
+const EXTRACT_TOOLS = [
   {
     name: 'ask_questions',
     description:
@@ -94,7 +103,7 @@ const TOOLS = [
           type: 'string',
           description: 'Име на файла и страница, напр. "IMG_1234.jpg" или "menu.pdf стр.2"',
         },
-        rows: { type: 'array', items: ROW_SCHEMA },
+        rows: ROWS_ARRAY,
       },
     },
   },
@@ -110,6 +119,71 @@ const TOOLS = [
         prices_include_vat: { type: 'string', enum: ['yes', 'no', 'unknown'] },
         summary: { type: 'string' },
       },
+    },
+  },
+]
+
+const EDIT_TOOLS = [
+  {
+    name: 'update_rows',
+    description:
+      'Промени конкретни полета на съществуващи редове. Включвай САМО полетата, които се променят.',
+    input_schema: {
+      type: 'object',
+      required: ['updates'],
+      properties: {
+        updates: {
+          type: 'array',
+          items: {
+            type: 'object',
+            required: ['id', 'set'],
+            properties: {
+              id: { type: 'string' },
+              set: {
+                type: 'object',
+                description:
+                  'Поле → нова стойност. Позволени: name, price, category, allergens, description, warning, include',
+              },
+            },
+          },
+        },
+        reason: { type: 'string', description: 'Един ред, който се показва на потребителя' },
+      },
+    },
+  },
+  {
+    name: 'delete_rows',
+    description: 'Премахни редове (дубликати, заглавия, взети по погрешка за ястия).',
+    input_schema: {
+      type: 'object',
+      required: ['ids'],
+      properties: {
+        ids: { type: 'array', items: { type: 'string' } },
+        reason: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'insert_rows',
+    description: 'Добави пропуснати ястия. Ползвай after_id за позиция; без него се добавят накрая.',
+    input_schema: {
+      type: 'object',
+      required: ['rows'],
+      properties: {
+        after_id: { type: 'string' },
+        source: { type: 'string' },
+        rows: ROWS_ARRAY,
+      },
+    },
+  },
+  {
+    name: 'replace_source',
+    description:
+      'Разчети наново цяла страница/файл, когато много редове на нея са грешни (напр. цените са изместени с един ред). Дай ВСИЧКИ редове на тази страница.',
+    input_schema: {
+      type: 'object',
+      required: ['source', 'rows'],
+      properties: { source: { type: 'string' }, rows: ROWS_ARRAY },
     },
   },
 ]
@@ -142,6 +216,13 @@ function buildSystemPrompt({ menuName, knownCategories }) {
     ``,
     `Използвай ask_questions САМО за неща, които засягат много редове. Въпросите да са кратки, с предложени опции.`,
     `Когато всички файлове са готови, извикай finish. Текстовите ти отговори да са много кратки.`,
+    ``,
+    `След това потребителят преглежда редовете и може да поиска промени на естествен език. Тогава:`,
+    `- Промяна по конкретни редове: update_rows (само променените полета).`,
+    `- Премахване: delete_rows. Пропуснати ястия: insert_rows.`,
+    `- Системна грешка на цяла страница (напр. цените са изместени с един ред): replace_source с всички редове на страницата, прочетени наново от снимката.`,
+    `- Таблицата, която потребителят ти праща, е истината за текущото състояние - той може да е редактирал на ръка.`,
+    `- Не извиквай finish отново.`,
   ]
 
   if (menuName || knownCategories?.length) {
@@ -254,7 +335,19 @@ function normalizeRow(raw, source) {
     picture_url: '',
     warning,
     include: true,
+    edited: '',
   }
+}
+
+// Claude must never be able to touch ids or internal fields.
+const EDITABLE = new Set([
+  'name', 'price', 'category', 'allergens', 'description', 'warning', 'include',
+])
+
+function coerce(field, value) {
+  if (field === 'price') return normalizePrice(value)
+  if (field === 'include') return Boolean(value)
+  return String(value ?? '').trim()
 }
 
 /* ------------------------------------------------------------- composable */
@@ -267,18 +360,38 @@ export function useMenuScan() {
   const info = ref(null)
   const busy = ref(false)
   const error = ref('')
+  const undoStack = ref([])
 
   // Conversation sent to the API, and tool_results waiting for the user's
   // next message. Every tool_use MUST get a tool_result in the next user
   // turn, so a pause parks them here rather than dropping them.
   let messages = []
   let pending = []
+  let mode = 'extract'
   let settings = { apiKey: '', model: '', menuName: '', knownCategories: [] }
 
   const totalBytes = computed(() => files.value.reduce((s, f) => s + f.size, 0))
   const warningCount = computed(() => rows.value.filter((r) => r.warning).length)
+  const canUndo = computed(() => undoStack.value.length > 0)
+  const canChat = computed(() => rows.value.length > 0 && messages.length > 0)
 
   const log = (text, kind = 'info') => feed.value.push({ id: feed.value.length, text, kind })
+
+  /* ---------------------------------------------------------------- undo */
+
+  // Whole-list snapshots: rows are small, flat objects, and this is far
+  // harder to get subtly wrong than per-field inverse operations.
+  function pushUndo(label) {
+    undoStack.value.push({ label, rows: rows.value.map((r) => ({ ...r })) })
+    if (undoStack.value.length > MAX_UNDO) undoStack.value.shift()
+  }
+
+  function undo() {
+    const entry = undoStack.value.pop()
+    if (!entry) return
+    rows.value = entry.rows
+    log(`Върнато: ${entry.label}`, 'warn')
+  }
 
   /* --------------------------------------------------------------- files */
 
@@ -311,7 +424,7 @@ export function useMenuScan() {
     files.value.forEach((f) => f.preview && URL.revokeObjectURL(f.preview))
   }
 
-  /* ----------------------------------------------------------- API call */
+  /* ------------------------------------------------------------ API call */
 
   async function callClaude(body) {
     const res = await fetch(API_URL, {
@@ -349,7 +462,8 @@ export function useMenuScan() {
       })
 
       // Cache everything up to here. The loop re-sends the files on every
-      // turn; cached they cost a fraction of the input price.
+      // turn, and so does every later chat edit; cached they cost a
+      // fraction of the input price.
       content[content.length - 1].cache_control = { type: 'ephemeral' }
     }
 
@@ -360,7 +474,7 @@ export function useMenuScan() {
     return { role: 'user', content }
   }
 
-  /* ------------------------------------------------------------ handlers */
+  /* -------------------------------------------------- extraction handlers */
 
   function handleAddRows(input) {
     const source = input.source || 'без източник'
@@ -395,10 +509,92 @@ export function useMenuScan() {
     return { result: 'Благодаря. Потребителят ще прегледа редовете.', done: true }
   }
 
+  /* -------------------------------------------------------- edit handlers */
+
+  function handleUpdateRows({ updates = [], reason }) {
+    pushUndo(reason || 'Промяна от Claude')
+
+    let changed = 0
+    const missing = []
+
+    for (const u of updates) {
+      const row = rows.value.find((r) => r.id === u.id)
+      if (!row) {
+        missing.push(u.id)
+        continue
+      }
+
+      for (const [field, value] of Object.entries(u.set || {})) {
+        if (!EDITABLE.has(field)) continue
+        row[field] = coerce(field, value)
+      }
+
+      row.edited = 'ai'
+      changed++
+    }
+
+    log(`✎ ${reason || 'Промяна'}: ${changed} реда`, 'edit')
+
+    // Reporting unknown ids back lets Claude correct itself instead of
+    // silently believing the edit landed.
+    return {
+      result: `Променени ${changed} реда.${missing.length ? ` Непознати id: ${missing.join(', ')}` : ''}`,
+    }
+  }
+
+  function handleDeleteRows({ ids = [], reason }) {
+    pushUndo(reason || 'Изтриване от Claude')
+
+    const before = rows.value.length
+    const set = new Set(ids)
+    rows.value = rows.value.filter((r) => !set.has(r.id))
+    const removed = before - rows.value.length
+
+    log(`✎ ${reason || 'Изтрити'}: ${removed} реда`, 'edit')
+    return { result: `Изтрити ${removed} реда.` }
+  }
+
+  function handleInsertRows({ rows: incoming = [], after_id: afterId, source }) {
+    pushUndo('Добавени редове от Claude')
+
+    const fresh = incoming
+      .map((r) => normalizeRow(r, source || 'добавено от Claude'))
+      .filter((r) => r.name)
+    fresh.forEach((r) => (r.edited = 'ai'))
+
+    const at = afterId ? rows.value.findIndex((r) => r.id === afterId) : -1
+    if (at > -1) rows.value.splice(at + 1, 0, ...fresh)
+    else rows.value.push(...fresh)
+
+    log(`✎ Добавени ${fresh.length} реда`, 'edit')
+    return { result: `Добавени ${fresh.length} реда.` }
+  }
+
+  function handleReplaceSource({ source, rows: incoming = [] }) {
+    pushUndo(`Повторно разчитане на ${source}`)
+
+    const at = rows.value.findIndex((r) => r.source === source)
+    const removed = rows.value.filter((r) => r.source === source).length
+
+    const fresh = incoming.map((r) => normalizeRow(r, source)).filter((r) => r.name)
+    fresh.forEach((r) => (r.edited = 'ai'))
+
+    const kept = rows.value.filter((r) => r.source !== source)
+    kept.splice(at > -1 ? at : kept.length, 0, ...fresh)
+    rows.value = kept
+
+    log(`✎ ${source}: ${removed} → ${fresh.length} реда`, 'edit')
+    return { result: `Заместих ${removed} реда от ${source} с ${fresh.length}.` }
+  }
+
   const HANDLERS = {
     add_rows: handleAddRows,
     ask_questions: handleAskQuestions,
     finish: handleFinish,
+    update_rows: handleUpdateRows,
+    delete_rows: handleDeleteRows,
+    insert_rows: handleInsertRows,
+    replace_source: handleReplaceSource,
   }
 
   /* ---------------------------------------------------------------- loop */
@@ -412,7 +608,7 @@ export function useMenuScan() {
           model: settings.model,
           max_tokens: MAX_TOKENS,
           system: buildSystemPrompt(settings),
-          tools: TOOLS,
+          tools: mode === 'extract' ? EXTRACT_TOOLS : EDIT_TOOLS,
           messages,
         })
 
@@ -489,9 +685,11 @@ export function useMenuScan() {
     error.value = ''
     rows.value = []
     feed.value = []
+    undoStack.value = []
     questions.value = null
     info.value = null
     pending = []
+    mode = 'extract'
     messages = [firstMessage(menuText)]
 
     log(
@@ -525,6 +723,51 @@ export function useMenuScan() {
     run()
   }
 
+  /* ---------------------------------------------------------- chat edits */
+
+  // TSV rather than JSON: far cheaper in tokens, and Claude reads it fine.
+  function rowsSnapshot() {
+    const head = 'id\tsource\tname\tprice\tcategory\tallergens\tdescription\twarning\tinclude'
+    const lines = rows.value.map((r) =>
+      [r.id, r.source, r.name, r.price, r.category, r.allergens, r.description, r.warning, r.include ? 1 : 0]
+        .map((v) => String(v ?? '').replace(/[\t\n]/g, ' '))
+        .join('\t')
+    )
+    return `${head}\n${lines.join('\n')}`
+  }
+
+  function sendChatEdit(text) {
+    if (!text.trim() || busy.value) return
+
+    // Claude has the photos cached, but it cannot see the user's manual
+    // grid edits - so the current table travels with every request.
+    mode = 'edit'
+    log(text.trim(), 'user')
+
+    messages.push({
+      role: 'user',
+      content: [
+        ...pending,
+        {
+          type: 'text',
+          text: `${text.trim()}
+
+Текущи редове (потребителят може да ги е редактирал на ръка; тази таблица е истината):
+${rowsSnapshot()}
+
+Направи промяната с update_rows / delete_rows / insert_rows (или replace_source за цяла страница). Не извиквай finish.`,
+        },
+      ],
+    })
+    pending = []
+
+    run()
+  }
+
+  function clearEditMarks() {
+    rows.value.forEach((r) => (r.edited = ''))
+  }
+
   return {
     files,
     rows,
@@ -533,12 +776,18 @@ export function useMenuScan() {
     info,
     busy,
     error,
+    undoStack,
     totalBytes,
     warningCount,
+    canUndo,
+    canChat,
     addFiles,
     removeFile,
     releaseFiles,
     start,
     answerQuestions,
+    sendChatEdit,
+    undo,
+    clearEditMarks,
   }
 }
