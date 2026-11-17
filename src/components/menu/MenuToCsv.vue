@@ -966,9 +966,19 @@ button.ghost { background: #fff; border: 1px solid var(--line); }
 
 /* ------------------------------------------------------------ dishes -- */
 
-.dishes { list-style: none; padding: 10px; margin: 0; display: grid; gap: 10px; background: var(--surface); }
+.dishes {
+  list-style: none;
+  padding: 10px;
+  margin: 0;
+  display: grid;
+  /* Without this the track can be wider than the card and the rows spill out */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  background: var(--surface);
+}
 
 .dish {
+  min-width: 0;
   padding: 12px;
   background: #fff;
   border: 1px solid var(--line);
@@ -1055,11 +1065,22 @@ button.ghost { background: #fff; border: 1px solid var(--line); }
   color: var(--warn);
 }
 
+/*
+ * One column by default. auto-fit with a 180px minimum would force a
+ * 180px track even when the card is narrower than that, pushing the
+ * inputs outside the card.
+ */
 .dish-fields {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   margin-top: 10px;
+}
+
+@media (min-width: 560px) {
+  .dish-fields {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
 }
 .dish-fields .wide { grid-column: 1 / -1; }
 
@@ -1104,7 +1125,23 @@ button.ghost { background: #fff; border: 1px solid var(--line); }
 @media (max-width: 480px) {
   .wrap { padding: 12px; }
   .panel { padding: 12px; }
-  .dish-price { flex-basis: 4.5rem; }
+  .dishes { padding: 8px; }
+  .dish { padding: 10px; }
+  .review-bar { gap: 8px; }
+  .bar-actions { width: 100%; }
+  .bar-actions .chip { flex: 1 1 auto; }
+}
+
+/*
+ * Below this the name, the number and the price can't share a line
+ * without the name becoming unusably narrow, so the name takes its own
+ * row and the price sits under it.
+ */
+@media (max-width: 440px) {
+  .dish-top { flex-wrap: wrap; row-gap: 8px; }
+  .dish-name { flex: 1 1 100%; order: -1; }
+  .dish-price { flex: 1 1 auto; }
+  .dish-warning { padding-left: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

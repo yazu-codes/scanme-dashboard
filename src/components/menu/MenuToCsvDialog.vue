@@ -75,6 +75,13 @@ const emit = defineEmits([
   max-width: 100vw;
   height: 100vh;
   max-height: 100vh;
+  /*
+   * dvh accounts for mobile browser chrome. With 100vh the dialog is
+   * taller than the visible area, so the sticky export bar sits below
+   * the fold and can't be reached.
+   */
+  height: 100dvh;
+  max-height: 100dvh;
   margin: 0;
   border-radius: 0;
   display: flex;
@@ -118,5 +125,20 @@ const emit = defineEmits([
   --page-bg: #eef2f6;
   max-width: 1100px;
   padding: 16px 20px 24px;
+}
+
+/*
+ * Needed here as well as in the component: this selector is two classes
+ * and the component's own mobile rule is one, so without a matching
+ * media query here the padding never shrinks on a phone.
+ */
+@media (max-width: 480px) {
+  .menu-to-csv-dialog .wrap {
+    padding: 12px 12px 20px;
+  }
+
+  .menu-to-csv-dialog .p-dialog-header {
+    padding: 10px 12px;
+  }
 }
 </style>
