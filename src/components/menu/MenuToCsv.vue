@@ -179,6 +179,8 @@
         <option v-for="c in allCategories" :key="c" :value="c" />
       </datalist>
 
+      <div class="review-layout" :class="{ split: showPane }">
+      <div class="rows-col">
       <div
         v-for="group in groupedRows"
         :key="group.category"
@@ -206,7 +208,15 @@
             v-for="r in group.rows"
             :key="r.id"
             class="dish"
-            :class="{ warned: r.warning, excluded: !r.include, touched: r.edited === 'ai' }"
+            :class="{
+              warned: r.warning,
+              excluded: !r.include,
+              touched: r.edited === 'ai',
+              active: showPane && activeRow === r,
+            }"
+            @mouseenter="hoverRow = r"
+            @mouseleave="hoverRow = null"
+            @focusin="hoverRow = r"
           >
             <div class="dish-top">
               <span class="pos">{{ positionOf(r) || '–' }}</span>
@@ -261,8 +271,9 @@
               <button
                 v-if="r.location"
                 class="icon-btn"
-                aria-label="Виж на снимката"
-                title="Виж на снимката"
+                :class="{ pinned: pinnedRow === r }"
+                :aria-label="pinnedRow === r ? 'Откачи източника' : 'Виж на снимката'"
+                :title="pinnedRow === r ? 'Откачи източника' : 'Виж на снимката'"
                 @click="openSource(r)"
               >⊙</button>
 
@@ -270,6 +281,25 @@
             </div>
           </li>
         </ul>
+      </div>
+      </div>
+
+      <!-- Wide screens: the page stays beside the cards -->
+      <aside v-if="showPane" class="source-col">
+        <MenuScanSourceViewer
+          v-if="activeRow"
+          :file="fileFor(activeRow)"
+          :row="activeRow"
+          :rows="scan.rows.value"
+          inline
+          @select="pinnedRow = $event"
+          @close="pinnedRow = null"
+        />
+
+        <p v-else class="pane-hint">
+          Посочи ястие, за да видиш откъде е прочетено. Бутонът ⊙ закача снимката.
+        </p>
+      </aside>
       </div>
 
       <div class="export-bar">
@@ -291,9 +321,10 @@
       </p>
     </template>
 
+    <!-- Narrow screens: full-screen instead of a pane -->
     <MenuScanSourceViewer
-      v-if="viewerRow"
-      :file="viewerFile"
+      v-if="viewerRow && !showPane"
+      :file="fileFor(viewerRow)"
       :row="viewerRow"
       :rows="scan.rows.value"
       @select="viewerRow = $event"
@@ -543,20 +574,38 @@ export default {
     /* ----------------------------------------------------- source viewer */
 
     const viewerRow = ref(null)
+    const hoverRow = ref(null)
+    const pinnedRow = ref(null)
+
+    // Wide enough for cards and a page side by side; below this the
+    // viewer takes over the screen instead.
+    const wideQuery = window.matchMedia('(min-width: 1100px)')
+    const isWide = ref(wideQuery.matches)
+    const onWideChange = (e) => (isWide.value = e.matches)
+    wideQuery.addEventListener('change', onWideChange)
+    onBeforeUnmount(() => wideQuery.removeEventListener('change', onWideChange))
+
+    const showPane = computed(() => isWide.value && scan.rows.value.length > 0)
+
+    // Pinning wins over hovering, so the page stays put while you edit.
+    const activeRow = computed(() => pinnedRow.value || hoverRow.value)
 
     // Rows carry the source string Claude wrote ("IMG_1234.jpg стр.2"), so
     // the file is matched by name rather than index.
-    const viewerFile = computed(() => {
-      const row = viewerRow.value
+    const fileFor = (row) => {
       if (!row) return null
       return (
         scan.files.value.find((f) => String(row.source || '').includes(f.name)) ||
         scan.files.value[0] ||
         null
       )
-    })
+    }
 
     const openSource = (row) => {
+      if (showPane.value) {
+        pinnedRow.value = pinnedRow.value === row ? null : row
+        return
+      }
       viewerRow.value = row
     }
 
@@ -644,7 +693,7 @@ export default {
       generate, submitAnswers, groupedRows, includedCount, positionOf, addRow, removeRow,
       isCategoryOpen, toggleCategory, openCategory, toggleAllCategories, anyCategoryOpen,
       toggleOnlyWarnings, sendEdit, canImport, importIntoMenu, saveKey, download, copy,
-      viewerRow, viewerFile, openSource,
+      viewerRow, hoverRow, pinnedRow, activeRow, showPane, fileFor, openSource,
     }
   },
 }
@@ -911,6 +960,43 @@ button.ghost { background: #fff; border: 1px solid var(--line); }
 
 /* Rows Claude just changed, so the result of an edit is visible at a glance */
 .dish.touched { box-shadow: 0 0 0 2px var(--accent); }
+
+/* Whichever row the page beside it is currently showing */
+.dish.active { box-shadow: 0 0 0 2px #2ca05a; }
+
+/* ------------------------------------------------------ split layout -- */
+
+.review-layout.split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
+  gap: 16px;
+  align-items: start;
+}
+.rows-col { min-width: 0; }
+
+.source-col {
+  position: sticky;
+  /* Clears the sticky review bar above it */
+  top: 64px;
+  height: calc(100vh - 190px);
+  min-height: 320px;
+}
+
+.pane-hint {
+  margin: 0;
+  padding: 20px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  text-align: center;
+  font-size: 0.9rem;
+  color: var(--muted);
+  background: #fff;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+}
+
+.icon-btn.pinned { color: #2ca05a; }
 
 .chat { display: flex; gap: 8px; margin-bottom: 12px; }
 .chat input { flex: 1 1 auto; min-width: 0; }

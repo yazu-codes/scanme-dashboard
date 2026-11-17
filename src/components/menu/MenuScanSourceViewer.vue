@@ -1,12 +1,21 @@
 <template>
-  <div class="viewer" role="dialog" aria-label="Източник на ястието">
+  <div
+    class="viewer"
+    :class="inline ? 'pane' : 'overlay'"
+    :role="inline ? 'region' : 'dialog'"
+    aria-label="Източник на ястието"
+  >
     <header class="viewer-head">
       <div class="where">
         <strong>{{ file?.name || 'Източник' }}</strong>
         <span v-if="file?.kind === 'pdf'">стр. {{ page }}</span>
       </div>
 
-      <button class="icon-btn" aria-label="Затвори" @click="$emit('close')">✕</button>
+      <button
+        class="icon-btn"
+        :aria-label="inline ? 'Откачи' : 'Затвори'"
+        @click="$emit('close')"
+      >✕</button>
     </header>
 
     <div class="viewer-body">
@@ -73,6 +82,9 @@ export default {
     file: { type: Object, default: null },
     row: { type: Object, default: null },
     rows: { type: Array, default: () => [] },
+
+    // Docked beside the cards instead of covering the screen.
+    inline: { type: Boolean, default: false },
   },
 
   emits: ['close', 'select'],
@@ -174,13 +186,24 @@ export default {
 
 <style scoped>
 .viewer {
-  position: fixed;
-  inset: 0;
-  z-index: 1200;
   display: flex;
   flex-direction: column;
   background: #10161d;
   color: #f3f6f9;
+}
+
+.viewer.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+}
+
+/* Docked: the host decides the height, the body scrolls inside it. */
+.viewer.pane {
+  height: 100%;
+  min-height: 0;
+  border-radius: 12px;
+  overflow: hidden;
 }
 
 .viewer-head, .viewer-foot {
