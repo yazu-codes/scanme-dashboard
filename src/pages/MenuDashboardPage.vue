@@ -105,6 +105,9 @@ const showMenuAssociations =
 const showMenuToCsv =
   ref(false)
 
+const showAnalytics =
+  ref(false)
+
 /*
 |--------------------------------------------------------------------------
 | Draft shortcuts
@@ -607,6 +610,9 @@ onMounted(
       @open-menu-to-csv="
         showMenuToCsv = true
       "
+      @open-analytics="
+        showAnalytics = true
+      "
     >
       <!--
         Mobile only: the bar is the one thing on screen
@@ -1058,6 +1064,22 @@ onMounted(
           .value
       "
     />
+
+    <!--
+      Analytics
+
+      The ref and the sidebar listener are wired, so the only missing
+      piece is the dialog. Uncomment this, change the name to your
+      component, and add its import at the top of the script.
+
+      <AnalyticsDialog
+        v-if="isAdmin"
+        v-model:visible="showAnalytics"
+        :menus="dashboard.menus.value"
+        :current-menu-id="dashboard.currentMenu.value?.id"
+        :token="dashboard.authToken.value"
+      />
+    -->
 
     <!--
       Menu → CSV
