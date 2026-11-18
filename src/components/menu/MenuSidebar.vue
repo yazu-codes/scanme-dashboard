@@ -8,6 +8,9 @@ import {
 } from 'vue'
 
 import Button from 'primevue/button'
+import Dialog from 'primevue/dialog'
+
+import AnalyticsEvents from './AnalyticsEvents.vue'
 
 const props = defineProps({
   isAdmin: {
@@ -40,6 +43,23 @@ const props = defineProps({
   apiBase: {
     type: String,
     default: '',
+  },
+
+  /*
+   * Bearer token for the analytics service. Kept apart
+   * from apiBase because the analytics server is its
+   * own deployment.
+   */
+  token: {
+    type: String,
+    default: null,
+  },
+
+  analyticsBase: {
+    type: String,
+    default:
+      import.meta.env.VITE_ANALYTICS_BASE ||
+      'https://scanme-analytics-production.up.railway.app',
   },
 
   /*
@@ -86,7 +106,6 @@ const emit = defineEmits([
 
   'save-api-base',
 
-  'open-analytics',
   'open-codes',
   'open-images',
   'open-users',
@@ -225,6 +244,33 @@ onBeforeUnmount(() => {
       'sidebar-drawer-open'
     )
 })
+
+/*
+|--------------------------------------------------------------------------
+| Analytics dialog
+|--------------------------------------------------------------------------
+|
+| Hosted here rather than emitted to the parent, so the
+| sidebar owns both the button and the modal.
+|
+| The drawer is closed first: otherwise it sits behind
+| the dialog on narrow screens with the page scroll
+| still locked.
+|
+| PrimeVue teleports the dialog to <body>, so the
+| drawer's z-index and overflow-y don't clip it.
+|
+*/
+
+const showAnalytics =
+  ref(false)
+
+function openAnalytics() {
+  closeDrawer()
+
+  showAnalytics.value =
+    true
+}
 
 /*
 |--------------------------------------------------------------------------
@@ -502,11 +548,7 @@ const currentMenuLabel =
           icon="pi pi-chart-bar"
           text
           class="w-full justify-start"
-          @click="
-            emitAndClose(
-              'open-analytics'
-            )
-          "
+          @click="openAnalytics"
         />
 
         <Button
@@ -641,6 +683,26 @@ const currentMenuLabel =
       </div>
     </div>
   </aside>
+
+  <!--
+    Outside <aside> so it isn't inside the drawer's
+    stacking context. The body only mounts while
+    visible, so no request is made until it's opened -
+    and it reloads on each open rather than going stale.
+  -->
+  <Dialog
+    v-model:visible="showAnalytics"
+    modal
+    dismissable-mask
+    append-to="body"
+    header="Analytics"
+    class="analytics-dialog"
+  >
+    <AnalyticsEvents
+      :api-base="analyticsBase"
+      :token="token"
+    />
+  </Dialog>
 </template>
 
 <style scoped>
@@ -800,6 +862,58 @@ const currentMenuLabel =
 @media (max-width: 900px) {
   .menu-dashboard-shell .menu-dashboard-main {
     padding-top: 3.5rem;
+  }
+}
+
+/*
+|--------------------------------------------------------------------------
+| Analytics dialog
+|--------------------------------------------------------------------------
+|
+| Unscoped because PrimeVue teleports the dialog to
+| <body>, which puts it outside this component's scope
+| attribute - a scoped rule, :deep() included, can never
+| reach it.
+|
+*/
+
+.analytics-dialog {
+  width: min(76rem, 95vw);
+  max-width: 100vw;
+}
+
+/*
+ * Without this the widest child - a long path, the stat
+ * strip - sets the dialog's width and pushes it past the
+ * viewport.
+ */
+.analytics-dialog .p-dialog-content {
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+/*
+ * Below this width a centred card wastes most of the
+ * screen, so the dialog becomes a full-screen sheet.
+ * 100dvh rather than 100vh so the mobile browser's
+ * address bar doesn't cut the bottom off.
+ */
+@media (max-width: 720px) {
+  .analytics-dialog.p-dialog {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    margin: 0;
+    border-radius: 0;
+  }
+
+  .analytics-dialog .p-dialog-header {
+    padding: 0.75rem 0.9rem;
+  }
+
+  .analytics-dialog .p-dialog-content {
+    padding: 0.75rem 0.9rem 1.5rem;
   }
 }
 </style>

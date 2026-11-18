@@ -105,9 +105,6 @@ const showMenuAssociations =
 const showMenuToCsv =
   ref(false)
 
-const showAnalytics =
-  ref(false)
-
 /*
 |--------------------------------------------------------------------------
 | Draft shortcuts
@@ -594,6 +591,7 @@ onMounted(
       :current-user="dashboard.currentUser.value"
       :is-admin="isAdmin"
       :api-base="dashboard.apiBase.value"
+      :token="dashboard.authToken.value"
 
       @select="dashboard.selectMenu"
       @new-menu="showNewMenu = true"
@@ -609,9 +607,6 @@ onMounted(
       "
       @open-menu-to-csv="
         showMenuToCsv = true
-      "
-      @open-analytics="
-        showAnalytics = true
       "
     >
       <!--
@@ -1064,22 +1059,6 @@ onMounted(
           .value
       "
     />
-
-    <!--
-      Analytics
-
-      The ref and the sidebar listener are wired, so the only missing
-      piece is the dialog. Uncomment this, change the name to your
-      component, and add its import at the top of the script.
-
-      <AnalyticsDialog
-        v-if="isAdmin"
-        v-model:visible="showAnalytics"
-        :menus="dashboard.menus.value"
-        :current-menu-id="dashboard.currentMenu.value?.id"
-        :token="dashboard.authToken.value"
-      />
-    -->
 
     <!--
       Menu → CSV
