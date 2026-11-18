@@ -86,6 +86,7 @@ const emit = defineEmits([
 
   'save-api-base',
 
+  'open-analytics',
   'open-codes',
   'open-images',
   'open-users',
@@ -496,6 +497,18 @@ const currentMenuLabel =
     <div class="sidebar-footer">
       <!-- Management -->
       <template v-if="loggedIn && isAdmin">
+        <Button
+          label="Analytics"
+          icon="pi pi-chart-bar"
+          text
+          class="w-full justify-start"
+          @click="
+            emitAndClose(
+              'open-analytics'
+            )
+          "
+        />
+
         <Button
           label="Manage images"
           icon="pi pi-images"
