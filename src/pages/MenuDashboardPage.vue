@@ -836,6 +836,11 @@ onMounted(
                   ?.menu_owner_name ||
                 ''
               "
+              :url-name="
+                owner
+                  ?.menu_owner_url_name ||
+                ''
+              "
               :is-admin="isAdmin"
             />
           </CollapsibleCard>
