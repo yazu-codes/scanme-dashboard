@@ -27,6 +27,11 @@ const themeOptions = [
   { label: 'Modern', value: 'modern' },
   { label: 'Noir', value: 'noir' },
   { label: 'Lantern', value: 'lantern' },
+  { label: 'Diner', value: 'diner' },
+  { label: 'Ladle', value: 'ladle' },
+  { label: 'Stitch', value: 'stitch' },
+  { label: 'Trattoria', value: 'trattoria' },
+  { label: 'Flame', value: 'flame' },
 ]
 </script>
 
