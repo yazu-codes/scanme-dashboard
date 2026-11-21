@@ -1,1134 +1,383 @@
 <script setup>
 import {
   computed,
-  onMounted,
+  onBeforeUnmount,
   ref,
   watch,
 } from 'vue'
 
 import Button from 'primevue/button'
-import Message from 'primevue/message'
-import ProgressSpinner from 'primevue/progressspinner'
 
-import MenuAssociationsDialog
-  from '@/components/menu/MenuAssociationsDialog.vue'
+const props = defineProps({
+  /*
+   * menu_owner_url_name - the public menu lives at
+   * {baseUrl}/{urlName}.
+   */
+  urlName: {
+    type: String,
+    default: '',
+  },
 
-import SignupUserDialog
-  from '@/components/menu/SignupUserDialog.vue'
+  config: {
+    type: Object,
+    required: true,
+  },
 
-import {
-  useMenuDashboard,
-} from '@/composables/useMenuDashboard'
-
-import MenuSidebar
-  from '@/components/menu/MenuSidebar.vue'
-
-import SaveBar
-  from '@/components/menu/SaveBar.vue'
-
-import MenuHeader
-  from '@/components/menu/MenuHeader.vue'
-
-import CollapsibleCard
-  from '@/components/menu/CollapsibleCard.vue'
-
-import MenuOwnerForm
-  from '@/components/menu/MenuOwnerForm.vue'
-
-import MenuConfigurationForm
-  from '@/components/menu/MenuConfigurationForm.vue'
-
-import CategoryTreeEditor
-  from '@/components/menu/CategoryTreeEditor.vue'
-
-import MenuItemsSection
-  from '@/components/menu/MenuItemsSection.vue'
-
-import MenuReviewLinksSection
-  from '@/components/menu/MenuReviewLinksSection.vue'
-
-import NewMenuDialog
-  from '@/components/menu/NewMenuDialog.vue'
-
-import LoginDialog
-  from '@/components/menu/LoginDialog.vue'
-
-import CodesDialog
-  from '@/components/menu/CodesDialog.vue'
-
-import ImagesDialog
-  from '@/components/menu/ImagesDialog.vue'
-
-import MenuToCsvDialog
-  from '@/components/menu/MenuToCsvDialog.vue'
-
-import '@/styles/menu-dashboard.css'
-import '@/styles/menu-forms.css'
-import '@/styles/menu-dialogs.css'
+  baseUrl: {
+    type: String,
+    default: 'https://tapmy.menu',
+  },
+})
 
 /*
 |--------------------------------------------------------------------------
-| Dashboard state
-|--------------------------------------------------------------------------
-*/
-
-const dashboard =
-  useMenuDashboard()
-
-/*
-|--------------------------------------------------------------------------
-| Dialogs
-|--------------------------------------------------------------------------
-*/
-
-const showSignupUser =
-  ref(false)
-
-const showNewMenu =
-  ref(false)
-
-const showLogin =
-  ref(false)
-
-const showCodes =
-  ref(false)
-
-const showImages =
-  ref(false)
-
-const authBusy =
-  ref(false)
-
-const showMenuAssociations =
-  ref(false)
-
-const showMenuToCsv =
-  ref(false)
-
-/*
-|--------------------------------------------------------------------------
-| Draft shortcuts
-|--------------------------------------------------------------------------
-*/
-
-const owner =
-  computed(
-    () =>
-      dashboard
-        .draftMenu
-        .value
-        ?.menu_owner
-  )
-
-const config =
-  computed(
-    () =>
-      dashboard
-        .draftMenu
-        .value
-        ?.menu_configuration
-  )
-
-const items =
-  computed(
-    () =>
-      dashboard
-        .draftMenu
-        .value
-        ?.menu_items ||
-      []
-  )
-
-const isAdmin = computed(
-  () => dashboard.currentUser.value?.role === 'admin'
-)
-
-/*
-|--------------------------------------------------------------------------
-| Review links
+| Devices
 |--------------------------------------------------------------------------
 |
-| They live on menu_owner. The backend may omit the key
-| when a menu has none, and the section pushes straight
-| into this array, so it has to exist ON the owner - a
-| `|| []` fallback alone would hand out a detached array
-| and silently drop new rows.
+| Phone first: these menus are opened from a QR code at a table, so a
+| desktop-width preview is the wrong picture of how the menu is seen.
 |
 */
+
+const DEVICES = {
+  phone: { label: 'Phone', width: 390 },
+  tablet: { label: 'Tablet', width: 768 },
+  desktop: { label: 'Desktop', width: null },
+}
+
+const device = ref('phone')
+
+const frameWidth =
+  computed(() => {
+    const width =
+      DEVICES[device.value].width
+
+    return width
+      ? `${width}px`
+      : '100%'
+  })
+
+/*
+|--------------------------------------------------------------------------
+| Preview URL
+|--------------------------------------------------------------------------
+|
+| The appearance settings travel as query params so the menu renders the
+| UNSAVED draft. Any param the menu app doesn't read is simply ignored,
+| in which case the preview falls back to showing the saved settings -
+| still useful, just not live.
+|
+*/
+
+const previewUrl =
+  computed(() => {
+    if (!props.urlName) {
+      return ''
+    }
+
+    const params =
+      new URLSearchParams()
+
+    // Lets the menu app skip analytics for this view.
+    params.set('preview', '1')
+
+    const c = props.config || {}
+
+    if (c.theme) params.set('theme', c.theme)
+    if (c.background_color) params.set('background_color', c.background_color)
+    if (c.font_color) params.set('font_color', c.font_color)
+    if (c.font_family) params.set('font_family', c.font_family)
+    if (c.font_size) params.set('font_size', String(c.font_size))
+
+    const base =
+      String(props.baseUrl)
+        .replace(/\/+$/, '')
+
+    return `${base}/${encodeURIComponent(props.urlName)}?${params}`
+  })
+
+/*
+|--------------------------------------------------------------------------
+| Loading
+|--------------------------------------------------------------------------
+|
+| Mounted on request rather than automatically: CollapsibleCard keeps its
+| slot in the DOM while collapsed, so an eager iframe would load the whole
+| public menu on every dashboard open.
+|
+*/
+
+const shown = ref(false)
+const loading = ref(false)
+const nonce = ref(0)
+
+// Changing src alone won't reload when the URL is unchanged, so the key
+// carries a nonce that the refresh button bumps.
+const frameKey =
+  computed(
+    () =>
+      `${liveUrl.value}#${nonce.value}`
+  )
+
+/*
+ * Debounced: typing a hex colour changes the URL on every keystroke, and
+ * each change is a full page load of the public menu.
+ */
+const liveUrl = ref('')
+
+let timer = null
 
 watch(
-  () => dashboard.draftMenu.value,
-  draft => {
-    const ownerDraft =
-      draft?.menu_owner
-
-    if (
-      ownerDraft &&
-      !Array.isArray(
-        ownerDraft.review_links
-      )
-    ) {
-      ownerDraft.review_links = []
+  previewUrl,
+  value => {
+    if (!shown.value) {
+      return
     }
-  },
-  {
-    immediate: true,
+
+    clearTimeout(timer)
+
+    timer = setTimeout(
+      () => {
+        if (value !== liveUrl.value) {
+          loading.value = true
+          liveUrl.value = value
+        }
+      },
+      600
+    )
   }
 )
 
-const reviewLinks =
-  computed(
-    () =>
-      owner
-        .value
-        ?.review_links ||
-      []
-  )
-
-const reviewLinksSummary =
-  computed(
-    () =>
-      `${reviewLinks.value.length} link${
-        reviewLinks.value.length === 1
-          ? ''
-          : 's'
-      }`
-  )
-
-/*
-|--------------------------------------------------------------------------
-| Section summaries
-|--------------------------------------------------------------------------
-|
-| Shown next to the section title so a collapsed card
-| still tells you what's inside it.
-|
-*/
-
-const ownerSummary =
-  computed(
-    () =>
-      owner.value
-        ?.menu_owner_name ||
-      ''
-  )
-
-const categoryCount =
-  computed(
-    () =>
-      Array.isArray(
-        config.value
-          ?.category_order
-      )
-        ? config
-          .value
-          .category_order
-          .length
-        : 0
-  )
-
-const categorySummary =
-  computed(
-    () =>
-      `${categoryCount.value} categor${
-        categoryCount.value === 1
-          ? 'y'
-          : 'ies'
-      }`
-  )
-
-const itemsSummary =
-  computed(
-    () =>
-      `${items.value.length} item${
-        items.value.length === 1
-          ? ''
-          : 's'
-      }`
-  )
-
-/*
-|--------------------------------------------------------------------------
-| Expand / collapse all
-|--------------------------------------------------------------------------
-*/
-
-const sectionKeys = [
-  'menu-owner',
-  'appearance',
-  'category-order',
-  'menu-items',
-  'review-links',
-]
-
-/*
- * Bumping this remounts the four cards, which makes
- * them re-read their stored state.
- */
-const sectionsVersion =
-  ref(0)
-
-function setAllSections(
-  open
-) {
-  for (
-    const key
-    of sectionKeys
-  ) {
-    try {
-      window.localStorage
-        .setItem(
-          `menu-dashboard:section:${key}`,
-          open ? '1' : '0'
-        )
-    } catch {
-      // Storage disabled, nothing to persist.
-    }
-  }
-
-  sectionsVersion.value += 1
-}
-
-/*
-|--------------------------------------------------------------------------
-| Import from the menu scanner
-|--------------------------------------------------------------------------
-|
-| The scanned rows become draft items, exactly like a CSV import: nothing
-| is sent anywhere until the normal Save button is pressed.
-|
-*/
-
-function handleScanImport(
-  payload
-) {
-  const draft =
-    dashboard
-      .draftMenu
-      .value
-
-  if (
-    !draft ||
-    String(payload?.menuId) !==
-      String(draft.id)
-  ) {
-    window.alert(
-      'Отвори същото меню в таблото, преди да внесеш ястията.'
-    )
-    return
-  }
-
-  const incoming =
-    payload.items || []
-
-  if (!incoming.length) {
-    return
-  }
-
-  for (
-    const values
-    of incoming
-  ) {
-    items.value.push({
-      _key:
-        Math
-          .random()
-          .toString(36)
-          .slice(2, 10),
-
-      menu_id:
-        draft.id,
-
-      ...values,
-    })
-  }
-
-  showMenuToCsv.value =
-    false
-
-  window.alert(
-    `${incoming.length} ястия са добавени като чернова. Натисни "Save", за да ги запишеш.`
-  )
-}
-
-/*
-|--------------------------------------------------------------------------
-| Login
-|--------------------------------------------------------------------------
-*/
-
-async function handleLogin(
-  email,
-  password
-) {
-  authBusy.value = true
-
-  try {
-    await dashboard.login(
-      email,
-      password
-    )
-
-    showLogin.value =
-      false
-  } catch (err) {
-    window.alert(
-      err.message
-    )
-  } finally {
-    authBusy.value =
-      false
-  }
-}
-
-/*
-|--------------------------------------------------------------------------
-| Logout
-|--------------------------------------------------------------------------
-*/
-
-function handleLogout() {
-  if (
-    dashboard.dirty.value &&
-    !window.confirm(
-      'You have unsaved changes. Log out anyway?'
-    )
-  ) {
-    return
-  }
-
-  dashboard.logout()
-}
-
-/*
-|--------------------------------------------------------------------------
-| Create menu
-|--------------------------------------------------------------------------
-*/
-
-async function handleCreate(
-  name,
-  urlName
-) {
-  try {
-    await dashboard
-      .createMenu(
-        name,
-        urlName
-      )
-
-    showNewMenu.value =
-      false
-  } catch (err) {
-    window.alert(
-      err.message
-    )
-  }
-}
-
-/*
-|--------------------------------------------------------------------------
-| Delete menu
-|--------------------------------------------------------------------------
-*/
-
-async function handleDelete() {
-  if (
-    !window.confirm(
-      'Delete this menu and everything in it? This cannot be undone.'
-    )
-  ) {
-    return
-  }
-
-  try {
-    await dashboard
-      .deleteCurrentMenu()
-  } catch (err) {
-    window.alert(
-      err.message
-    )
-  }
-}
-
-/*
-|--------------------------------------------------------------------------
-| Suspend / enable
-|--------------------------------------------------------------------------
-*/
-
-async function handleSuspend() {
-  try {
-    const success =
-      await dashboard
-        .toggleSuspended()
-
-    if (
-      !success &&
-      dashboard.dirty.value
-    ) {
-      window.alert(
-        'Save or discard your changes before changing menu status.'
-      )
-    }
-  } catch (err) {
-    window.alert(
-      err.message
-    )
-  }
-}
-
-/*
-|--------------------------------------------------------------------------
-| Yumm
-|--------------------------------------------------------------------------
-*/
-
-async function handleYumm(
-  menuId
-) {
-  try {
-    const success =
-      await dashboard
-        .toggleYumm(
-          menuId
-        )
-
-    if (
-      !success &&
-      dashboard.dirty.value
-    ) {
-      window.alert(
-        'Save or discard your changes before changing Yumm status.'
-      )
-    }
-  } catch (err) {
-    window.alert(
-      err.message
-    )
-  }
-}
-
-/*
-|--------------------------------------------------------------------------
-| Change API base
-|--------------------------------------------------------------------------
-*/
-
-async function handleApiBase(
-  value
-) {
-  if (
-    dashboard.dirty.value &&
-    !window.confirm(
-      'Changing the API connection will discard your current menu changes. Continue?'
-    )
-  ) {
-    return
-  }
-
-  dashboard.updateApiBase(
-    value
-  )
-
-  /*
-   * Only reload if authenticated.
-   */
-  if (
-    dashboard.loggedIn.value
-  ) {
-    try {
-      await dashboard.loadMenus({
-        preserveSelection:
-          false,
-      })
-    } catch {
-      // Error is already exposed through dashboard.error.
-    }
-  }
-}
-
-/*
-|--------------------------------------------------------------------------
-| Initial load
-|--------------------------------------------------------------------------
-*/
-
-onMounted(
-  async () => {
-    /*
-     * If a token was restored from localStorage,
-     * immediately try loading the user's menus.
-     *
-     * If the token has expired, menuApi.js will receive
-     * the 401 and clear the session automatically.
-     */
-    if (
-      dashboard.loggedIn.value
-    ) {
-      try {
-        await dashboard.loadMenus({
-          preserveSelection:
-            false,
-        })
-      } catch {
-        // dashboard.error already contains the error.
-      }
-    }
-  }
+onBeforeUnmount(
+  () => clearTimeout(timer)
 )
+
+function show() {
+  shown.value = true
+  loading.value = true
+  liveUrl.value = previewUrl.value
+}
+
+function hide() {
+  shown.value = false
+  liveUrl.value = ''
+  clearTimeout(timer)
+}
+
+function refresh() {
+  if (!shown.value) {
+    return
+  }
+
+  loading.value = true
+  liveUrl.value = previewUrl.value
+  nonce.value += 1
+}
+
+// Stale by more than the debounce, e.g. while the preview was hidden.
+const outOfDate =
+  computed(
+    () =>
+      shown.value &&
+      liveUrl.value !== '' &&
+      liveUrl.value !== previewUrl.value
+  )
 </script>
 
 <template>
-  <div class="menu-dashboard-shell">
-    <!-- Sidebar -->
-    <MenuSidebar
-      :menus="dashboard.menus.value"
-      :current-menu-id="
-        dashboard.currentMenu.value?.id
-      "
-      :logged-in="dashboard.loggedIn.value"
-      :current-user="dashboard.currentUser.value"
-      :is-admin="isAdmin"
-      :api-base="dashboard.apiBase.value"
-      :token="dashboard.authToken.value"
+  <div class="theme-preview">
+    <div class="preview-bar">
+      <strong>Live preview</strong>
 
-      @select="dashboard.selectMenu"
-      @new-menu="showNewMenu = true"
-      @toggle-yumm="handleYumm"
-      @login="showLogin = true"
-      @logout="handleLogout"
-      @save-api-base="handleApiBase"
-      @open-codes="showCodes = true"
-      @open-images="showImages = true"
-      @open-users="showSignupUser = true"
-      @open-menu-associations="
-        showMenuAssociations = true
-      "
-      @open-menu-to-csv="
-        showMenuToCsv = true
-      "
-    >
-      <!--
-        Mobile only: the bar is the one thing on screen
-        at all times, so the section controls ride along
-        with it instead of scrolling away.
-      -->
-      <template #topbar-actions>
-        <template
-          v-if="
-            dashboard
-              .draftMenu
-              .value
-          "
-        >
-          <Button
-            icon="pi pi-angle-double-down"
-            text
-            rounded
-            aria-label="Expand all sections"
-            @click="
-              setAllSections(true)
-            "
-          />
-
-          <Button
-            icon="pi pi-angle-double-up"
-            text
-            rounded
-            aria-label="Collapse all sections"
-            @click="
-              setAllSections(false)
-            "
-          />
-        </template>
-      </template>
-    </MenuSidebar>
-
-    <!-- Main -->
-    <main class="menu-dashboard-main">
-      <!-- Initial loading -->
-      <div
-        v-if="
-          dashboard.loading.value &&
-          !dashboard.menus.value.length
-        "
-        class="dashboard-loading"
-      >
-        <ProgressSpinner
-          style="
-            width: 42px;
-            height: 42px;
-          "
-        />
-      </div>
-
-      <!-- Error -->
-      <Message
-        v-if="
-          dashboard.error.value
-        "
-        severity="error"
-        closable
-        @close="
-          dashboard.error.value =
-            null
-        "
-      >
-        {{
-          dashboard.error.value
-        }}
-      </Message>
-
-      <!-- Logged out -->
-      <div
-        v-if="
-          !dashboard.loggedIn.value
-        "
-        class="dashboard-placeholder"
-      >
-        <h2>
-          Log in
-        </h2>
-
-        <p>
-          Log in to access your menus.
-        </p>
-
-        <br>
-
-        <button
-          type="button"
-          class="p-button p-component"
-          @click="
-            showLogin = true
-          "
-        >
-          <span
-            class="
-              p-button-icon
-              pi
-              pi-sign-in
-            "
-          />
-
-          <span
-            class="
-              p-button-label
-            "
-          >
-            Log in
-          </span>
-        </button>
-      </div>
-
-      <!-- Authenticated dashboard -->
-      <template
-        v-else
-      >
-        <!-- Selected menu -->
-        <template
-          v-if="
-            dashboard
-              .draftMenu
-              .value
-          "
-        >
-          <!-- Unsaved changes -->
-          <div
-            v-if="
-              dashboard
-                .dirty
-                .value
-            "
-            class="save-bar-dock"
-          >
-            <SaveBar
-              :saving="
-                dashboard
-                  .saving
-                  .value
-              "
-              @save="
-                dashboard.saveMenu
-              "
-              @discard="
-                dashboard.discardDraft
-              "
-            />
-          </div>
-
-          <!-- Menu heading -->
-          <MenuHeader
-            :menu="
-              dashboard
-                .draftMenu
-                .value
-            "
-            :dirty="
-              dashboard
-                .dirty
-                .value
-            "
-            :is-admin="isAdmin"
-            @toggle-suspended="
-              handleSuspend
-            "
-            @delete="
-              handleDelete
-            "
-          />
-
-          <!-- Section controls -->
-          <div class="section-controls">
-            <Button
-              label="Expand all"
-              icon="pi pi-angle-double-down"
-              severity="secondary"
-              text
-              size="small"
-              @click="
-                setAllSections(true)
-              "
-            />
-
-            <Button
-              label="Collapse all"
-              icon="pi pi-angle-double-up"
-              severity="secondary"
-              text
-              size="small"
-              @click="
-                setAllSections(false)
-              "
-            />
-          </div>
-
-          <!-- Owner -->
-          <CollapsibleCard
-            v-if="owner"
-            :key="`owner-${sectionsVersion}`"
-            title="Menu owner"
-            :subtitle="ownerSummary"
-            storage-key="menu-owner"
-            :default-open="false"
-            flush
-          >
-            <MenuOwnerForm
-              :owner="owner"
-              :is-admin="isAdmin"
-            />
-          </CollapsibleCard>
-
-          <!-- Configuration -->
-          <CollapsibleCard
-            v-if="config"
-            :key="`appearance-${sectionsVersion}`"
-            title="Appearance"
-            storage-key="appearance"
-            :default-open="false"
-            flush
-          >
-            <MenuConfigurationForm
-              :config="config"
-              :owner-name="
-                owner
-                  ?.menu_owner_name ||
-                ''
-              "
-              :url-name="
-                owner
-                  ?.menu_owner_url_name ||
-                ''
-              "
-              :is-admin="isAdmin"
-            />
-          </CollapsibleCard>
-
-          <!-- Category order -->
-          <CollapsibleCard
-            v-if="config"
-            :key="`categories-${sectionsVersion}`"
-            title="Category order"
-            :subtitle="categorySummary"
-            storage-key="category-order"
-            :default-open="false"
-            flush
-          >
-            <CategoryTreeEditor
-              v-model="
-                config.category_order
-              "
-            />
-          </CollapsibleCard>
-
-          <!-- Items -->
-          <CollapsibleCard
-            :key="`items-${sectionsVersion}`"
-            title="Menu items"
-            :subtitle="itemsSummary"
-            storage-key="menu-items"
-            :default-open="false"
-            flush
-          >
-            <MenuItemsSection
-              :items="items"
-              :menu-id="
-                dashboard
-                  .draftMenu
-                  .value
-                  .id
-              "
-              :menu-name="
-                dashboard
-                  .draftMenu
-                  .value
-                  ?.menu_owner
-                  ?.menu_owner_name ||
-                ''
-              "
-              :menu-slug="
-                dashboard
-                  .draftMenu
-                  .value
-                  ?.menu_owner
-                  ?.menu_owner_url_name ||
-                ''
-              "
-              :token="
-                dashboard
-                  .authToken
-                  .value
-              "
-              :category-order="
-                config
-                  ?.category_order ||
-                []
-              "
-              :is-admin="isAdmin"
-            />
-          </CollapsibleCard>
-
-          <!-- Review links -->
-          <CollapsibleCard
-            v-if="isAdmin"
-            :key="`review-links-${sectionsVersion}`"
-            title="Review links"
-            :subtitle="reviewLinksSummary"
-            storage-key="review-links"
-            :default-open="false"
-            flush
-          >
-            <MenuReviewLinksSection
-              :links="reviewLinks"
-              :menu-id="
-                dashboard
-                  .draftMenu
-                  .value
-                  .id
-              "
-            />
-          </CollapsibleCard>
-        </template>
-
-        <!-- No menu selected -->
+      <template v-if="urlName">
         <div
-          v-else-if="
-            !dashboard.loading.value
-          "
-          class="dashboard-placeholder"
+          v-if="shown"
+          class="devices"
+          role="group"
+          aria-label="Preview width"
         >
-          <template
-            v-if="
-              dashboard
-                .menus
-                .value
-                .length
-            "
-          >
-            <h2>
-              Select a menu
-            </h2>
-
-            <p>
-              Choose a menu from the sidebar.
-            </p>
-          </template>
-
-          <template
-            v-else
-          >
-            <h2>
-              No menus available
-            </h2>
-
-            <p>
-              This account currently has no menus.
-            </p>
-          </template>
+          <button
+            v-for="(d, key) in DEVICES"
+            :key="key"
+            type="button"
+            class="device"
+            :class="{ picked: device === key }"
+            :aria-pressed="device === key"
+            @click="device = key"
+          >{{ d.label }}</button>
         </div>
+
+        <Button
+          v-if="!shown"
+          label="Show preview"
+          icon="pi pi-eye"
+          size="small"
+          outlined
+          @click="show"
+        />
+
+        <template v-else>
+          <Button
+            icon="pi pi-refresh"
+            size="small"
+            text
+            rounded
+            aria-label="Reload preview"
+            :class="{ 'is-stale': outOfDate }"
+            @click="refresh"
+          />
+
+          <Button
+            icon="pi pi-times"
+            size="small"
+            text
+            rounded
+            aria-label="Hide preview"
+            @click="hide"
+          />
+        </template>
+
+        <a
+          :href="previewUrl"
+          target="_blank"
+          rel="noopener"
+          class="open-link"
+        >Open in a tab</a>
       </template>
-    </main>
+    </div>
 
-    <!-- Create menu -->
-    <NewMenuDialog
-      v-model:visible="
-        showNewMenu
-      "
-      :saving="
-        dashboard
-          .saving
-          .value
-      "
-      @create="
-        handleCreate
-      "
-    />
+    <p v-if="!urlName" class="preview-note">
+      This menu has no URL name yet, so there is no public page to preview.
+      Add one under Menu owner and save.
+    </p>
 
-    <!-- Login -->
-    <LoginDialog
-      v-model:visible="
-        showLogin
-      "
-      :loading="
-        authBusy
-      "
-      @submit="
-        handleLogin
-      "
-    />
+    <template v-else-if="shown">
+      <div class="stage">
+        <div
+          class="frame"
+          :class="device"
+          :style="{ width: frameWidth }"
+        >
+          <iframe
+            :key="frameKey"
+            :src="liveUrl"
+            title="Public menu preview"
+            loading="lazy"
+            referrerpolicy="no-referrer"
+            @load="loading = false"
+          />
 
-    <!-- Codes -->
-    <CodesDialog
-      v-model:visible="
-        showCodes
-      "
-      :menus="
-        dashboard
-          .menus
-          .value
-      "
-      :api="
-        dashboard
-          .api
-          .value
-      "
-    />
+          <div v-if="loading" class="frame-loading">Loading…</div>
+        </div>
+      </div>
 
-    <!-- Images -->
-    <ImagesDialog
-      v-model:visible="
-        showImages
-      "
-      :menus="
-        dashboard
-          .menus
-          .value
-      "
-      :token="
-        dashboard
-          .authToken
-          .value
-      "
-      :current-menu-id="
-        dashboard
-          .currentMenu
-          .value
-          ?.id
-      "
-    />
-
-    <SignupUserDialog
-      v-model:visible="
-        showSignupUser
-      "
-      :token="
-        dashboard
-          .authToken
-          .value
-      "
-    />
-
-    <MenuAssociationsDialog
-      v-model:visible="
-        showMenuAssociations
-      "
-      :token="
-        dashboard
-          .authToken
-          .value
-      "
-      :menus="
-        dashboard
-          .menus
-          .value
-      "
-    />
-
-    <!--
-      Menu → CSV
-
-      The sidebar button is already admin-only, but the
-      dialog is gated too so nothing else can surface it
-      for a non-admin.
-    -->
-    <MenuToCsvDialog
-      v-if="isAdmin"
-      v-model:visible="
-        showMenuToCsv
-      "
-      :menus="
-        dashboard
-          .menus
-          .value
-      "
-      :current-menu-id="
-        dashboard
-          .currentMenu
-          .value
-          ?.id
-      "
-      @import="
-        handleScanImport
-      "
-    />
+      <p class="preview-note">
+        Shows the live site. If a setting doesn't appear here, the menu app
+        isn't reading that query parameter yet.
+      </p>
+    </template>
   </div>
 </template>
 
 <style scoped>
-.section-controls {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.25rem;
-  margin-bottom: 0.5rem;
+.theme-preview {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--p-content-border-color, rgba(0, 0, 0, 0.12));
 }
 
-/*
- * Same breakpoint as the sidebar drawer: below it these
- * live in the sticky bar instead.
- */
-@media (max-width: 900px) {
-  .section-controls {
-    display: none;
-  }
+.preview-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
 
-  /*
-   * Fixed rather than sticky, so appearing and
-   * disappearing doesn't shift everything below it.
-   * Not absolute: with no positioned ancestor it would
-   * scroll away with the page instead of staying put.
-   *
-   * The sticky nav is 3rem tall at z-index 41, so this
-   * docks below it and outranks it. Keep both numbers in
-   * step with MenuSidebar.
-   */
-  .save-bar-dock {
-    position: fixed;
-    top: 3rem;
-    left: 0;
-    right: 0;
-    z-index: 42;
-    padding: 0 0.85rem;
-  }
+.preview-bar > strong {
+  margin-right: auto;
+}
+
+.devices {
+  display: flex;
+  gap: 2px;
+}
+
+.device {
+  min-height: 36px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 0.85rem;
+  color: inherit;
+  background: none;
+  border: 1px solid var(--p-content-border-color, rgba(0, 0, 0, 0.12));
+  cursor: pointer;
+}
+.device:first-child { border-radius: 6px 0 0 6px; }
+.device:last-child { border-radius: 0 6px 6px 0; }
+.device + .device { border-left: 0; }
+
+.device.picked {
+  background: var(--p-primary-color, #1f5c9e);
+  border-color: var(--p-primary-color, #1f5c9e);
+  color: #fff;
+}
+
+.device:focus-visible,
+.open-link:focus-visible {
+  outline: 2px solid var(--p-primary-color, #1f5c9e);
+  outline-offset: 2px;
+}
+
+/* Nudges the refresh button when the draft has moved past the frame */
+.is-stale { color: #9a5500; }
+
+.open-link {
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.stage {
+  display: flex;
+  justify-content: center;
+  margin-top: 0.75rem;
+}
+
+.frame {
+  position: relative;
+  max-width: 100%;
+  height: 70vh;
+  min-height: 420px;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid var(--p-content-border-color, rgba(0, 0, 0, 0.12));
+  border-radius: 10px;
+}
+
+/* A little device-like, without pretending to be a photo of a phone */
+.frame.phone { border-radius: 22px; border-width: 6px; }
+.frame.tablet { border-radius: 14px; border-width: 5px; }
+
+.frame iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.frame-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  color: #5a6775;
+  font-size: 0.9rem;
+}
+
+.preview-note {
+  margin: 0.6rem 0 0;
+  font-size: 0.8rem;
+  color: #5a6775;
 }
 </style>
