@@ -33,6 +33,7 @@ const themeOptions = [
   { label: 'Trattoria', value: 'trattoria' },
   { label: 'Flame', value: 'flame' },
   { label: 'Crave', value: 'crave' },
+  { label: 'Ember', value: 'ember' },
 ]
 </script>
 
